@@ -1,0 +1,16 @@
+# Ignore everything by default
+*
+
+# Allow the .gitignore file itself
+!.gitignore
+
+# Allow specific directories (must end with /)
+!configs/
+!src/
+
+# Allow all shell scripts
+!*.sh
+
+# Optional: If you want to keep specific files inside the allowed folders
+!configs/**
+!src/**

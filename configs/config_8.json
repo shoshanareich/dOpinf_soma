@@ -1,0 +1,8 @@
+{
+    "n_year_train": 5,
+    "n_year_predict": 10,
+    "n_days": 1,
+    "center_opt": "mean",
+    "scale": "var",
+    "target_ret_energy": 0.6
+}
