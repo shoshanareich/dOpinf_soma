@@ -234,30 +234,34 @@ def gather_and_save_surface(local_surf_dask, name, preproc_dir, nx, ny, rank, co
 
 
 
-def transform_and_project_k(var, n_year_train, n_days, center_opt, scale, Tr, Q_ROM_, root_dir, nx=248, ny=248, k=0, anom=False):
+def transform_and_project_k(snapshot_dirs, var, n_year_train, n_days, center_opt, scale, Tr, Q_ROM_, root_dir, nx=248, ny=248, k=0, anom=False):
     '''
     undo center/scale and project
     S_rom = [S_fom,train - center] Tr Q_ROM_ + center
     '''
+    S_FOM_train_all = []
+    for snapshot_dir in snapshot_dirs:
+        ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="h5netcdf",  
+                            decode_timedelta=False, decode_times=False, chunks={})#, backend_kwargs={'driver': 'mpio'})
 
-    snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
-    ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="netcdf4",  
-                    decode_timedelta=False, decode_times=False, chunks={})
+    # zero_zone_end = 55
+        zero_zone_end = 0
+        if var == 'Eta':
+            S_FOM_train = ds[var].isel(time=slice(0, 360*n_year_train, n_days)).stack(space=('j', 'i')).T.values
+        #   S_FOM_train = S_FOM_train.where(S_FOM_train.i >= zero_zone_end, 0)
+        #   S_FOM_train = S_FOM_train.values
 
-   # zero_zone_end = 55
-    zero_zone_end = 0
-    if var == 'Eta':
-        S_FOM_train = ds[var].isel(time=slice(0, 360*n_year_train, n_days)).stack(space=('j', 'i')).T.values
-     #   S_FOM_train = S_FOM_train.where(S_FOM_train.i >= zero_zone_end, 0)
-     #   S_FOM_train = S_FOM_train.values
+        elif var =='U':
+            S_FOM_train = ds[var].isel(k=k, time=slice(0, 360*n_year_train, n_days)).stack(space=('j', 'i_g')).T.values
+        # S_FOM_train = S_FOM_train.where(S_FOM_train.i_g >= zero_zone_end, 0)
+        elif var =='V':
+            S_FOM_train = ds[var].isel(k=k, time=slice(0, 360*n_year_train, n_days)).stack(space=('j_g', 'i')).T.values
+        else:
+            S_FOM_train = ds[var].isel(k=k, time=slice(0, 360*n_year_train, n_days)).stack(space=('j', 'i')).T.values
 
-    elif var =='U':
-        S_FOM_train = ds[var].isel(k=k, time=slice(0, 360*n_year_train, n_days)).stack(space=('j', 'i_g')).T.values
-       # S_FOM_train = S_FOM_train.where(S_FOM_train.i_g >= zero_zone_end, 0)
-    elif var =='V':
-        S_FOM_train = ds[var].isel(k=k, time=slice(0, 360*n_year_train, n_days)).stack(space=('j_g', 'i')).T.values
-    else:
-        S_FOM_train = ds[var].isel(k=k, time=slice(0, 360*n_year_train, n_days)).stack(space=('j', 'i')).T.values
+        S_FOM_train_all.append(S_FOM_train)
+      
+    S_FOM_train = np.hstack(S_FOM_train_all)
 
     center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
     alphas = np.load(root_dir + f'/preproc/alpha_{center_opt}_{scale}_{n_year_train}yrs.npy', allow_pickle=True).item()
@@ -287,20 +291,27 @@ def transform_and_project_k(var, n_year_train, n_days, center_opt, scale, Tr, Q_
 
 
 
-def transform_and_project_lon(var, n_year_train, n_days, center_opt, scale, Tr, Q_ROM_, root_dir, i=124, nx=248, ny=248, nz=31, anom=False):
+def transform_and_project_lon(snapshot_dirs, var, n_year_train, n_days, center_opt, scale, Tr, Q_ROM_, root_dir, i=124, nx=248, ny=248, nz=31, anom=False):
     '''
     undo center/scale and project
     S_rom = [S_fom,train - center] Tr Q_ROM_ + center
     '''
 
-    snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
-    ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="netcdf4",  
-                    decode_timedelta=False, decode_times=False, chunks={})
+   # snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
+    S_FOM_train_all = []
+    for snapshot_dir in snapshot_dirs:
+        ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="h5netcdf",  
+                            decode_timedelta=False, decode_times=False, chunks={})#, backend_kwargs={'driver': 'mpio'})
 
-    if var =='V':
-        S_FOM_train = ds[var].isel(i_g=i, time=slice(0, 360*n_year_train, n_days)).stack(space=('k', 'j_g')).T.values
-    else:
-        S_FOM_train = ds[var].isel(i=i, time=slice(0, 360*n_year_train, n_days)).stack(space=('k', 'j')).T.values
+        if var =='V':
+            S_FOM_train = ds[var].isel(i_g=i, time=slice(0, 360*n_year_train, n_days)).stack(space=('k', 'j_g')).T.values
+        else:
+            S_FOM_train = ds[var].isel(i=i, time=slice(0, 360*n_year_train, n_days)).stack(space=('k', 'j')).T.values
+        
+        S_FOM_train_all.append(S_FOM_train)
+      
+    S_FOM_train = np.hstack(S_FOM_train_all)
+
 
     center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
     center = center_da.center.values.reshape(nz, ny, nx)
@@ -330,9 +341,9 @@ def transform_and_project_lon(var, n_year_train, n_days, center_opt, scale, Tr, 
 
 ### load var
 
-def load_var_fom_k(var, n_year_train, n_year_predict, n_days, root_dir, center_opt, scale, nx=248, ny=248, k=0, anom=False):
+def load_var_fom_k(snapshot_dir, var, n_year_train, n_year_predict, n_days, root_dir, center_opt, scale, nx=248, ny=248, k=0, anom=False):
     
-    snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
+   # snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
     ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="netcdf4",  
                     decode_timedelta=False, decode_times=False, chunks={})
 
@@ -365,9 +376,9 @@ def load_var_fom_k(var, n_year_train, n_year_predict, n_days, root_dir, center_o
     return var_FOM, var_FOM_3d
 
 
-def load_var_fom_lon(var, n_year_train, n_year_predict, n_days, root_dir, center_opt, scale, nx=248, ny=248, nz=31, i=124,anom=False):
+def load_var_fom_lon(snapshot_dir, var, n_year_train, n_year_predict, n_days, root_dir, center_opt, scale, nx=248, ny=248, nz=31, i=124,anom=False):
     
-    snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
+    #snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
     ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="netcdf4",  
                     decode_timedelta=False, decode_times=False, chunks={})
 
@@ -519,3 +530,30 @@ def compute_barotropic_streamfunction(
 
     # --- 8. HARD synchronization point ---
     comm.Barrier()
+
+
+
+
+def get_new_IC(snapshot_dir, centers, alphas, n_year_train, n_days, rank, size, nx=248):
+    '''create q0 for new forcing in full dimension'''
+
+    # read in snapshots
+    ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="h5netcdf",  
+                    decode_timedelta=False, decode_times=False, chunks={}).isel(time=slice(0,1))
+
+    U0_rank, V0_rank, Eta0_rank, T0_rank, S0_rank = reshape_data(nx, n_days, n_year_train, ds, rank, size)
+
+    # transform data
+    U0_rank = (U0_rank - centers[0][:, np.newaxis]) / alphas['U']
+    V0_rank = (V0_rank - centers[1][:, np.newaxis]) / alphas['V']
+    Eta0_rank = (Eta0_rank - centers[2][:, np.newaxis]) / alphas['Eta']
+    T0_rank = (T0_rank - centers[3][:, np.newaxis]) / alphas['T']
+    S0_rank = (S0_rank - centers[4][:, np.newaxis]) / alphas['S']
+
+    IC_rank = np.vstack([U0_rank, V0_rank, Eta0_rank, T0_rank, S0_rank])
+    
+    return IC_rank
+
+
+
+

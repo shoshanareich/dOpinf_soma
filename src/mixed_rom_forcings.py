@@ -42,6 +42,8 @@ root_dir = '/scratch/shoshi/soma4/dOpInf_results/'
 snapshot_dirs = ['/scratch/shoshi/soma4/run_20yrs_tau0.1/',
                     '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/']
 
+IC_dir = '/scratch/shoshi/soma4/run_20yrs_tau0.3/'
+
 ## spatial vars
 nx = 248
 ny = nx
@@ -148,14 +150,14 @@ Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_op
 
 
 ## save scaling
-if rank == 0:
-    alphas = {
+alphas = {
         "U": alphaU,
         "V": alphaV,
         "T": alphaT,
         "S": alphaS,
         "Eta": alphaEta,
     }
+if rank == 0:
     np.save(preproc_dir + f"alpha_{center_opt}_{scale}_{n_year_train}yrs.npy", alphas)
 
 
@@ -196,6 +198,23 @@ elif 'r' in locals():
 else:
     raise ValueError("Neither 'r' nor 'target_ret_energy' was defined.")
 svd.compute()
+
+
+###### parallel matrix multiplication to project ICs
+# read in new IC and shiftscale based on training data
+centers = [centerU, centerV, centerEta, centerT, centerS]
+IC_rank = get_new_IC(IC_dir, centers, alphas, n_year_train, n_days, rank, size, nx=248)
+
+
+## IC_ = Tr^T @ Q^T @ IC
+IC_rank_ = Q_rank.T @ IC_rank
+IC_rank_ = IC_rank_.compute()
+
+IC_global = np.zeros_like(IC_rank_)
+comm.Allreduce(IC_rank_, IC_global, op=MPI.SUM)
+q0_ = svd.Tr_global.T @ IC_global
+
+
 
 results_dir = None
 # Create the results directory
@@ -258,18 +277,26 @@ if rank ==0:
         'g': g.ravel(), #* alphaU,
     }
 
-    ## ROM inputs
-
-    inputs = [build_rom_inputs(Tmax, tau1, n_year_train, n_days),
-              build_rom_inputs(Tmax, tau4, n_year_train, n_days)]
 
     ### transform forcings
     
-    SST_transformed_global = np.load(preproc_dir + 'SST_transformed_global.npy')
-    SSS_transformed_global = np.load(preproc_dir + 'SSS_transformed_global.npy')
-    SSU_transformed_global = np.load(preproc_dir + 'SSU_transformed_global.npy')
+    SST_transformed_global = np.load(preproc_dir + 'SST_transformed_surface.npy')
+    SSS_transformed_global = np.load(preproc_dir + 'SSS_transformed_surface.npy')
+    SSU_transformed_global = np.load(preproc_dir + 'SSU_transformed_surface.npy')
 
     B, C = project_surface_forcings_multiple(SST_transformed_global, SSS_transformed_global, SSU_transformed_global, svd.Tr_global, forcings)
+
+    ## ROM inputs
+
+    inputs_list = [build_rom_inputs(Tmax, tau1, n_year_train, n_days),
+                    build_rom_inputs(Tmax, tau4, n_year_train, n_days)]
+    
+    inputs_stacked = np.hstack([build_rom_inputs(Tmax, tau1, n_year_train, n_days),
+                                build_rom_inputs(Tmax, tau4, n_year_train, n_days)])
+
+    ## slice concatenated Qhat into a list 
+    num_scenarios = svd.Qhat_global.shape[1] // nt
+    states_list = [svd.Qhat_global[:, i*nt : (i+1)*nt] for i in range(num_scenarios)]
 
 
     print('learn ROM')
@@ -282,18 +309,14 @@ if rank ==0:
     weights_A = np.logspace(-10, 1, n_train_A)
   #  weights_H = np.logspace(-2, 10, n_train_H)
   #  weights_A = np.logspace(-8, 3, n_train_A)
-    # #weights_A = np.logspace(-4, 1, n_train_A)
-
-    # weights_A = np.array([1e-16])
-    # weights_H = np.array([1e-16])
 
     cond = np.linalg.cond(svd.Qhat_global)
     print(f'condition number: {cond}')
 
     ## regularization parameter search 
     sweep = TikhonovSweep(
-        Q_=svd.Qhat_global,
-        inputs=inputs,
+        Qs_=states_list,
+        inputs=inputs_list,
         B=B,
         C=C,
         r=svd.r,
@@ -304,20 +327,37 @@ if rank ==0:
       #  norm_weights=abs(W_)
     )
 
+
+    # grid search for best regularization parameters
     reg_A, reg_H, best_err = sweep.run()
     print("Best:", best_err, reg_A, reg_H)
 
+    # build final model with best reg params
+    model = sweep.fit_best_model()
+    model.model.save(results_dir + 'model.h5', overwrite=True)
 
-    inputs = [build_rom_inputs(Tmax, tau1, n_year_train + n_year_predict, n_days),
-              build_rom_inputs(Tmax, tau4, n_year_train + n_year_predict, n_days)]
+    # predict for all training scenarios
+    inputs_list_predict = [build_rom_inputs(Tmax, tau1, n_year_train + n_year_predict, n_days),
+                    build_rom_inputs(Tmax, tau4, n_year_train + n_year_predict, n_days)]
+    
+    for i, (Q_, u_in) in enumerate(zip(states_list, inputs_list_predict)):
+        Q0 = Q_[:, 0]
+        
+        Q_rec = model.predict(Q0, niters= int((n_year_train + n_year_predict)* 360 / n_days), inputs=u_in)
+        
+        # Save each reconstruction
+        np.save(results_dir + f'Q_ROM_train_scenario_{i}.npy', Q_rec)
+        print(f"Reconstructed and saved training scenario {i}")
 
-    model, Q_ROM_ = sweep.fit_best_model(
-        inputs_fit=inputs,
-        niters=(n_year_train + n_year_predict) * int(360 / n_days) ,
-    )
+    # predict for unseen case
+    tau = F.compute_wind_seasonal_amplitude(max_val=0.3)
+    inputs_new = build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
 
-    # save rom for all predict years
-    np.save(results_dir + f'Q_ROM_.npy', Q_ROM_)
+
+    ## using projected q0 
+    # OR can use Q0 from training scenario, looking at how well we can drift ##
+    Q_ROM_ = model.predict(q0_[:,0], niters = int((n_year_train + n_year_predict)* 360 / n_days), inputs=inputs_new)
+    np.save(results_dir + f'Q_ROM_test3.npy', Q_ROM_)
 
 
 comm.Barrier()
@@ -350,6 +390,9 @@ compute_barotropic_streamfunction(
 )
 
 
+
+
+#region OLD PLOT CODE
 
 
     # read in FOM for comparison
@@ -441,3 +484,6 @@ compute_barotropic_streamfunction(
 #     vid = plotter.animate_monthly(Eta_ROM_monthlymean, Eta_FOM_monthlymean, timesteps=range(Eta_FOM_monthlymean.shape[0]))
 #     HTML(vid.to_jshtml())
 #     vid.save(save_dir +f'monthly_avg_r{svd.r}_{center_opt}_{n_year_train}yrs.gif')
+
+
+#endregion

@@ -37,7 +37,7 @@ def weighted_lp_error(Q_true, Q_approx, weights=None, normalize=True):
 
 
 
-def fit_and_score_model(reg_A, reg_H, *, Q_, inputs, B, C, r, nt, t, weights=None):
+def fit_and_score_model(reg_A, reg_H, *, Qs_, inputs, B, C, r, nt, t, weights=None):
     """Fit ROM with given regularization and return (converged, error)."""
 
     if reg_A > reg_H:
@@ -55,7 +55,7 @@ def fit_and_score_model(reg_A, reg_H, *, Q_, inputs, B, C, r, nt, t, weights=Non
         ],
         regularization_parameters=[reg_c, reg_A, reg_H],
         state_dimension=r,
-        #input_dimension=2,
+       # input_dimension=len(inputs),
     )
 
     solver = opinf.lstsq.TikhonovSolver(regularizer, method="lstsq")
@@ -69,39 +69,42 @@ def fit_and_score_model(reg_A, reg_H, *, Q_, inputs, B, C, r, nt, t, weights=Non
         #opinf.operators.InputOperator(),
        # opinf.operators.CubicOperator()
     ]
-
-    # Check for NaNs or Infs
-    if not np.isfinite(Q_).all():
-        print("Warning: Q_hat contains NaNs or Infs!")
             
-    model = opinf.models.DiscreteModel(operators, solver=solver)
-    model = model.fit(states=Q_, inputs=inputs)
+    #model = opinf.models.DiscreteModel(operators, solver=solver)
+    #model = model.fit(states=Qs_, inputs=inputs)
+    rom = opinf.ROM(model=opinf.models.DiscreteModel(operators, solver=solver))
+    model = rom.fit(states=Qs_, inputs=inputs)
 
-    Q_ROM_ = model.predict(Q_[:, 0], niters=nt, inputs=inputs)
 
-    if np.isnan(Q_ROM_).any():
-        return False, np.inf
+   # # slice the big matrix to check how it performs on each scenario
+   # num_scenarios = Qs_.shape[1] // nt
+    scenario_errors = []
+
+   # for i in range(num_scenarios):
+    for i in range(len(Qs_)):
+        # # Extract the ground truth and inputs for THIS scenario
+        # start, end = i * nt, (i + 1) * nt
+        # Q_true = Qs_[:, start:end]
+        # u = inputs[:, start:end]
+
+        # Predict starting from the first snapshot of this segment
+       # Q_ROM_ = model.predict(Q_true[:, 0], niters=nt, inputs=u)
+        Q_ROM_ = model.predict(Qs_[i][:, 0], niters=nt, inputs=inputs[i])
+
+        if np.isnan(Q_ROM_).any():
+            return False, np.inf
     
-
-    abs_l2err = weighted_lp_error(
-        Q_[:, :len(t)], 
-        Q_ROM_, 
-        weights=weights,  # Ensure this matches the spatial dimension of Q_
-        normalize=True
-    )
-
-    # abs_l2err, _ = opinf.post.lp_error(
-    #     Q_[:, :len(t)], Q_ROM_, normalize=True
-    # )
-
-    return True, la.norm(abs_l2err)
+       # err = weighted_lp_error(Q_true, Q_ROM_, weights=weights, normalize=True)
+        err = weighted_lp_error(Qs_[i], Q_ROM_, weights=weights, normalize=True)
+        scenario_errors.append(la.norm(err))
+    return True, max(scenario_errors)
 
 
 
 
 class TikhonovSweep:
-    def __init__(self, *, Q_, inputs, B, C, r, nt, t, weights_A, weights_H, norm_weights=None):
-        self.Q_ = Q_
+    def __init__(self, *, Qs_, inputs, B, C, r, nt, t, weights_A, weights_H, norm_weights=None):
+        self.Qs_ = Qs_
         self.inputs = inputs
         self.B = B
         self.C = C
@@ -135,7 +138,7 @@ class TikhonovSweep:
                 converged, err = fit_and_score_model(
                     reg_A,
                     reg_H,
-                    Q_=self.Q_,
+                    Qs_=self.Qs_,
                     inputs=self.inputs,
                     B=self.B,
                     C=self.C,
@@ -190,8 +193,11 @@ class TikhonovSweep:
         return obj
 
 
-    def fit_best_model(self, *, inputs_fit, niters):
-        'fit using best regs'
+    def fit_best_model(self):
+        """
+        Retrain the model using the best regularization found during the sweep
+        across ALL training scenarios and return the trained model object.
+        """
         if self.best_reg_A is None:
             raise RuntimeError("run() or load() must be called first.")
 
@@ -209,10 +215,10 @@ class TikhonovSweep:
             ],
             regularization_parameters=[reg_c, reg_A, reg_H],
             state_dimension=self.r,
-          #  input_dimension=2,
+          #  input_dimension=len(self.inputs),
         )
 
-        solver = opinf.lstsq.TikhonovSolver(regularizer)
+        solver = opinf.lstsq.TikhonovSolver(regularizer, method='lstsq')
 
         operators = [
             opinf.operators.InputOperator(entries=self.B),
@@ -224,13 +230,12 @@ class TikhonovSweep:
             #opinf.operators.CubicOperator(),
         ]
 
-        model = opinf.models.DiscreteModel(operators, solver=solver)
-        model = model.fit(states=self.Q_, inputs=inputs_fit)
+        # model = opinf.models.DiscreteModel(operators, solver=solver)
 
-        Q_ROM_ = model.predict(
-            self.Q_[:, 0],
-            niters=niters,
-            inputs=inputs_fit,
-        )
+        # # Fit with all training states and inputs
+        # model = model.fit(states=self.Qs_, inputs=self.inputs)
 
-        return model, Q_ROM_
+        rom = opinf.ROM(model=opinf.models.DiscreteModel(operators, solver=solver))
+        model = rom.fit(states=self.Qs_, inputs=self.inputs)
+
+        return model
