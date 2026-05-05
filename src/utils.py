@@ -291,11 +291,13 @@ def transform_and_project_k(snapshot_dirs, var, n_year_train, n_days, center_opt
 
 
 
-def transform_and_project_lon(snapshot_dirs, var, n_year_train, n_days, center_opt, scale, Tr, Q_ROM_, root_dir, i=124, nx=248, ny=248, nz=31, anom=False):
+def transform_and_project_lon(snapshot_dirs, var, n_year_train, n_days, center_opt, scale, Tr, Q_ROM_, root_dir, i=124, nx=248, ny=248, nz=31, anom=False, preproc_dir=None):
     '''
     undo center/scale and project
     S_rom = [S_fom,train - center] Tr Q_ROM_ + center
     '''
+    if preproc_dir is None:
+       preproc_dir =root_dir + 'preproc/'
 
    # snapshot_dir = '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/'
     S_FOM_train_all = []
@@ -313,7 +315,7 @@ def transform_and_project_lon(snapshot_dirs, var, n_year_train, n_days, center_o
     S_FOM_train = np.hstack(S_FOM_train_all)
 
 
-    center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+    center_da = xr.open_dataset(preproc_dir + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
     center = center_da.center.values.reshape(nz, ny, nx)
     center = center[:, :, i].ravel()
 
