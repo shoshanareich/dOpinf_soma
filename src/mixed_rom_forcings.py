@@ -39,10 +39,11 @@ if MPI.COMM_WORLD.Get_rank() == 0:
 
 #root_dir = '/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/' 
 root_dir = '/scratch/shoshi/soma4/dOpInf_results/'
-snapshot_dirs = ['/scratch/shoshi/soma4/run_20yrs_tau0.1/',
-                    '/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/']
+snapshot_dirs = ['/scratch/shoshi/soma4/run_10yrspinup_tau0.1/',
+                    '/scratch/shoshi/soma4/run_10yrspinup_tau0.5/']
 
-IC_dir = '/scratch/shoshi/soma4/run_20yrs_tau0.3/'
+#IC_dir = '/scratch/shoshi/soma4/run_20yrs_tau0.3/'
+test_dir = '/scratch/shoshi/soma4/run_10yrspinup_tau0.3/'
 
 ## spatial vars
 nx = 248
@@ -77,15 +78,16 @@ N = nx*ny*nz
 # target_ret_energy = config.get('target_ret_energy')
 # r = config.get('r')
 
-n_year_train = 2
-n_year_predict = 10
+n_year_train = 5
+n_year_predict = 0
 n_days = 1
 center_opt = 'mean'
 scale = 'maxabs'
 
 # check for target_ret_energy or r
-target_ret_energy = 0.85
-r = None
+#target_ret_energy = 0.85
+target_ret_energy = None
+r = 20
 
 if (target_ret_energy is None and r is None) or (target_ret_energy is not None and r is not None):
     raise ValueError("Must define either 'target_ret_energy' OR 'r' in config.json")
@@ -102,7 +104,7 @@ if rank == 0:
 preproc_dir = None
 # Create the results directory
 if rank == 0:
-    preproc_dir = root_dir + 'save_roms/taus_1_4/'
+    preproc_dir = root_dir + 'save_roms/taus_1_5_sameIC/'
     os.makedirs(preproc_dir, exist_ok=True)
 
 preproc_dir = comm.bcast(preproc_dir, root=0)
@@ -186,7 +188,7 @@ gc.collect()
 
 if rank ==0:
     print('snapshot matrix compiled. starting SVD...')
-    sval_dir = root_dir + '/svals/taus_1_4/'
+    sval_dir = root_dir + '/svals/taus_1_5_sameIC/'
     os.makedirs(sval_dir, exist_ok=True)
 
 ### SVD
@@ -202,24 +204,27 @@ svd.compute()
 
 ###### parallel matrix multiplication to project ICs
 # read in new IC and shiftscale based on training data
-centers = [centerU, centerV, centerEta, centerT, centerS]
-IC_rank = get_new_IC(IC_dir, centers, alphas, n_year_train, n_days, rank, size, nx=248)
+# centers = [centerU, centerV, centerEta, centerT, centerS]
+# IC_rank = get_new_IC(IC_dir, centers, alphas, n_year_train, n_days, rank, size, nx=248)
 
 
-## IC_ = Tr^T @ Q^T @ IC
-IC_rank_ = Q_rank.T @ IC_rank
-IC_rank_ = IC_rank_.compute()
+# ## IC_ = Tr^T @ Q^T @ IC
+# IC_rank_ = Q_rank.T @ IC_rank
+# IC_rank_ = IC_rank_.compute()
 
-IC_global = np.zeros_like(IC_rank_)
-comm.Allreduce(IC_rank_, IC_global, op=MPI.SUM)
-q0_ = svd.Tr_global.T @ IC_global
+# IC_global = np.zeros_like(IC_rank_)
+# comm.Allreduce(IC_rank_, IC_global, op=MPI.SUM)
+# q0_ = svd.Tr_global.T @ IC_global
+
+## if using same IC for all:
+q0_ = svd.Qhat_global[:,0]
 
 
 
 results_dir = None
 # Create the results directory
 if rank == 0:
-    results_dir = root_dir + 'save_roms/taus_1_4/' +f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}/'
+    results_dir = root_dir + 'save_roms/taus_1_5_sameIC/' +f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}/'
     os.makedirs(results_dir, exist_ok=True)
     print(f"Results directory created: {results_dir}", flush=True)
     

@@ -485,7 +485,7 @@ class PsiPlotter:
         """
         self.root_dir = root_dir
         self.n_year_train = n_year_train
-        self.psi_fom = psi_fom_ds.psi
+        self.psi_fom = psi_fom_ds.psi_bt
         self.psi_rom = psi_rom_ds.psi
         
         # 1. Compute Monthly Means
@@ -498,7 +498,7 @@ class PsiPlotter:
         self.fom_time_mean = self.fom_monthly.mean(dim='time')
         self.rom_time_mean = self.rom_monthly.mean(dim='time')
 
-    def plot_comparison_summary(self, month_offset=6, save_path=None):
+    def plot_comparison_summary(self, month_offset=-1, save_path=None):
         """Creates the 2x2 plot of Instantaneous vs Time-Averaged Psi."""
         # Calculate specific instant (default is 6 months into prediction)
         t_idx = int(self.n_year_train * 12 + month_offset)

@@ -14,3 +14,6 @@
 # Optional: If you want to keep specific files inside the allowed folders
 !configs/**
 !src/**
+src/__pycache__/
+*.pyc
+src/.results_path_local*
