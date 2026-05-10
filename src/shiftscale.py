@@ -8,6 +8,21 @@ import dask.array as da
 import os
 
 
+def ensure_time_chunks(Q_rank, target_time_chunk=360):
+    """Rechunk snapshot dask arrays to keep time chunks manageable."""
+    if not hasattr(Q_rank, "rechunk"):
+        return Q_rank
+
+    try:
+        n_time = int(Q_rank.shape[1]) if Q_rank.shape[1] is not None else target_time_chunk
+    except Exception:
+        n_time = target_time_chunk
+
+    try:
+        return Q_rank.rechunk({1: min(target_time_chunk, n_time)})
+    except Exception:
+        return Q_rank
+
 
 def scalefactor(Q_rank, scale_type='maxabs', comm=None):
     """
@@ -76,55 +91,74 @@ def compute_climatology(Q_rank, cycle_len, comm):
     return seasonal_mean_local
 
 
-def shiftscale(Q_rank, comm=None, center_type='',
+def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
                scale_type='maxabs', save_file=None, nx=248, ny=248, nz=31):
     """
     Q_rank: dask array (space, time)
     """
+    if comm is None and hasattr(n_year_train, "Get_rank"):
+        comm = n_year_train
+        n_year_train = None
 
     n_space, n_time = Q_rank.shape
     rank = comm.Get_rank() if comm else 0
+    
     center_ref = None
+
+    # Keep time chunks reasonable before any reductions.
+    if hasattr(Q_rank, 'chunks'):
+        Q_rank = ensure_time_chunks(Q_rank, target_time_chunk=min(360, n_time))
 
     # check if center file already exists:
     file_exists = False
     if rank == 0:
         if save_file and os.path.exists(save_file):
             file_exists = True
-           # print('center file already exists. Using this instead of recomputing.')
-    
+
     if comm:
         file_exists = comm.bcast(file_exists, root=0)
 
-
-   # if it exists, read it in!
+    # if it exists, read it in!
     if file_exists:
+        if rank == 0:
+            print(f"Loading center_ref from {save_file}", flush=True)
         try:
-            # Every rank opens the file
-            with xr.open_dataset(save_file, engine="h5netcdf") as ds:
-                global_center = ds['center'].values # Load into memory
-                actual_nz = ds.attrs.get('nz', nz)
-                
-                if center_type == 'global_mean':
-                    center_ref = np.array([global_center])
-                else:
-                    # Logic to slice the global file back to local rank size
-                    # We reconstruct the 3D/4D shape to slice along the 'nx' dimension
-                    i_start, i_end = slice_space(nx, rank, comm.Get_size() if comm else 1)
-                    
-                    if global_center.ndim == 1:
-                        # Reshape to (nz, ny, nx), slice, then flatten back to local (n_space,)
-                        reshaped = global_center.reshape((actual_nz, ny, nx))
-                        center_ref = reshaped[:, :, i_start:i_end].flatten()
-                    else:
-                        # Handle seasonal/monthly (nz, ny, nx, n_cols)
-                        n_cols = global_center.shape[-1]
-                        reshaped = global_center.reshape((actual_nz, ny, nx, n_cols))
-                        sliced = reshaped[:, :, i_start:i_end, :]
-                        center_ref = sliced.reshape((-1, n_cols))
+            # Only rank 0 reads from disk, then broadcasts
+            nz_saved = None
             
             if rank == 0:
-                print(f"Successfully loaded and sliced center_ref from {save_file}")
+                with xr.open_dataset(save_file, engine="h5netcdf") as ds:
+                    nz_saved = int(ds.attrs.get('nz', 1))
+                    if center_type == 'global_mean':
+                        global_center = np.array([ds['center'].values])
+                    else:
+                        # Load the global center (all spatial points)
+                        global_center = ds['center'].values
+                    
+                    if global_center.ndim > 1 and global_center.shape[1] == 1:
+                        global_center = global_center[:, 0]
+                
+                print(f"Successfully loaded center_ref from {save_file}")
+            
+            # Broadcast global center to all ranks
+            if comm:
+                global_center = comm.bcast(global_center if rank == 0 else None, root=0)
+                nz_saved = comm.bcast(nz_saved, root=0)
+            
+            # Now each rank slices its local portion
+            if center_type != 'global_mean' and global_center is not None:
+                i_start, i_end = slice_space(nx, rank, comm.Get_size() if comm else 1)
+                if global_center.ndim == 1:
+                    center_ref = global_center.reshape((nz_saved, ny, nx))[:, :, i_start:i_end].ravel()
+                else:
+                    n_cols = global_center.shape[1]
+                    center_ref = (
+                        global_center.reshape((nz_saved, ny, nx, n_cols))[:, :, i_start:i_end, :]
+                        .reshape((-1, n_cols))
+                    )
+            else:
+                center_ref = global_center
+            
         except Exception as e:
             if rank == 0:
                 print(f"Warning: Failed to load {save_file}: {e}. Computing from scratch.")
@@ -177,10 +211,9 @@ def shiftscale(Q_rank, comm=None, center_type='',
     # ---------- SCALE BASED ON SHIFTED DATA ----------
     if scale_type is not None:
         alpha = scalefactor(Q_shifted, scale_type, comm)
-
         if np.ndim(alpha) == 1:
-            alpha = np.where(alpha == 0, 1.0, alpha) # Add a small epsilon to avoid division by zero in masked/static regions
-            alpha = alpha[:, np.newaxis] # broadcast-safe
+            alpha = np.where(alpha == 0, 1.0, alpha)
+            alpha = alpha[:, np.newaxis]
     else:
         alpha = 1
 
@@ -189,7 +222,9 @@ def shiftscale(Q_rank, comm=None, center_type='',
     alpha2 = scalefactor(Q_rank, 'maxabs', comm)
     Q_rank = Q_rank / alpha2
 
-    return Q_rank, center_ref, alpha
+    alpha_total = alpha * alpha2
+
+    return Q_rank, center_ref, alpha_total
 
 
 

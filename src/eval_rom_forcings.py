@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,6 +82,84 @@ def split_csv(value: str) -> list[str]:
 
 def ensure_slash(path: str) -> str:
     return path if path.endswith("/") else path + "/"
+
+
+def list_to_csv(values: list[str]) -> str:
+    return ",".join(str(value) for value in values)
+
+
+def scenario_name_from_dir(path: str) -> str:
+    return Path(path.rstrip("/")).name
+
+
+def scenario_label_from_dir(path: str, is_test: bool = False) -> str:
+    name = scenario_name_from_dir(path)
+    match = re.search(r"tau\d+(?:\.\d+)?", name)
+    label = match.group(0) if match else name
+    return f"{label}-test" if is_test else label
+
+
+def infer_r_from_data_dir(data_dir: str | None) -> int | None:
+    if data_dir is None:
+        return None
+    match = re.search(r"_r(\d+)(?:/)?$", data_dir.rstrip("/"))
+    return int(match.group(1)) if match else None
+
+
+def infer_r_from_tr(data_dir: str | None) -> int | None:
+    if data_dir is None:
+        return None
+    tr_path = Path(data_dir) / "Tr.npy"
+    if not tr_path.exists():
+        return None
+    return int(np.load(tr_path, mmap_mode="r").shape[1])
+
+
+def apply_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill evaluator options from the ROM training JSON unless CLI overrides them."""
+    if args.config is None:
+        return args
+
+    with open(args.config, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    args.target_ret_energy = config.get("target_ret_energy")
+
+    scalar_keys = {
+        "n_year_train": "n_year_train",
+        "n_year_predict": "n_year_predict",
+        "n_days": "n_days",
+        "center_opt": "center_opt",
+        "scale": "scale",
+        "r": "r",
+    }
+    for attr, key in scalar_keys.items():
+        if getattr(args, attr) is None and config.get(key) is not None:
+            setattr(args, attr, config[key])
+
+    snapshot_dirs = config.get("snapshot_dirs") or []
+    test_dir = config.get("test_dir")
+    if args.training_dirs is None and snapshot_dirs:
+        args.training_dirs = list_to_csv(snapshot_dirs)
+    if args.test_dir is None and test_dir:
+        args.test_dir = test_dir
+
+    fom_dirs = snapshot_dirs + ([test_dir] if test_dir else [])
+    if args.scenario_labels is None and fom_dirs:
+        labels = config.get("scenario_labels") or [
+            scenario_label_from_dir(path, is_test=(idx == len(fom_dirs) - 1))
+            for idx, path in enumerate(fom_dirs)
+        ]
+        args.scenario_labels = list_to_csv(labels)
+
+    if args.rom_files is None and snapshot_dirs and test_dir:
+        train_files = [f"Q_ROM_train_{scenario_name_from_dir(path)}.npy" for path in snapshot_dirs]
+        test_file = f"Q_ROM_test_{scenario_name_from_dir(test_dir)}.npy"
+        args.rom_files = list_to_csv(train_files + [test_file])
+
+    if args.preproc_dir is None and config.get("dir_extension"):
+        args.preproc_dir = str(Path(args.root_dir) / "save_roms" / config["dir_extension"])
+
+    return args
 
 
 def load_center(preproc_dir: str, var: str, center_opt: str, n_days: int, n_year_train: int) -> xr.DataArray:
@@ -432,6 +512,8 @@ def plot_variability_maps(
         rom_var = np.nanvar(np.asarray(getattr(fields, rom_attr)), axis=0)
         variances.append((fom_var, rom_var, rom_var - fom_var))
     vmax = np.nanpercentile([v for pair in variances for v in pair[:2]], 98)
+    if var == "Eta":
+        vmax = 0.02
     diff_lim = np.nanpercentile(np.abs([pair[2] for pair in variances]), 98)
     field_mesh = None
     error_mesh = None
@@ -486,6 +568,37 @@ def plot_timeseries_locations(
     axes[-1].set_xlabel("Year")
     fig.supylabel(VAR_META[var]["label"])
     savefig(fig, outdir / f"{var.lower()}_location_timeseries.png")
+
+
+def plot_spatial_mean_timeseries(
+    fields_by_scenario: dict[str, SurfaceFields],
+    var: str,
+    fom_attr: str,
+    rom_attr: str,
+    n_days: int,
+    outdir: Path,
+) -> None:
+    fig, ax = plt.subplots(1, 1, figsize=(15, 5))
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    for idx, (label, fields) in enumerate(fields_by_scenario.items()):
+        fom = np.asarray(getattr(fields, fom_attr), dtype=float)
+        rom = np.asarray(getattr(fields, rom_attr), dtype=float)
+        nt = min(fom.shape[0], rom.shape[0])
+        years = np.arange(nt) * n_days / 360.0
+        color = colors[idx % len(colors)]
+
+        fom_mean = np.nanmean(np.where(fom[:nt] == 0, np.nan, fom[:nt]), axis=(1, 2))
+        rom_mean = np.nanmean(np.where(rom[:nt] == 0, np.nan, rom[:nt]), axis=(1, 2))
+        ax.plot(years, fom_mean, label=f"MITgcm {label}", ls="--", color=color, lw=1.6)
+        ax.plot(years, rom_mean, label=f"ROM {label}", color=color, lw=1.6)
+
+    ax.set_title(f"Mean {VAR_META[var]['short']}", fontsize=18)
+    ax.set_xlabel("Year", fontsize=12)
+    ax.set_ylabel(VAR_META[var]["label"], fontsize=12)
+    ax.grid(True, alpha=0.3)
+    ax.legend(ncol=2, fontsize=9)
+    savefig(fig, outdir / f"{var.lower()}_spatial_mean_timeseries.png")
 
 
 def plot_monthly_snapshots(
@@ -596,10 +709,11 @@ def plot_vertical_temperature_profiles(
             ax.plot(profile_rom.values, depth_plot, ls="-", color=color, label=f"ROM {scenario.label}")
             ax.set_title(window_label, fontsize=14, pad=15)
             ax.set_xlabel(r"Temperature ($^\circ$C)", fontsize=12, fontweight="bold")
+            ax.set_xlim(5, 14)
+            ax.set_ylim(-1000, 0)
             ax.grid(True, linestyle="--", alpha=0.5)
         section_data.append((scenario.label, t_fom_3d, t_rom_da, depth_dim, horizontal_dim))
 
-    axes[0].set_ylim(np.nanmin(depth), 0)
     axes[0].set_ylabel("Depth (m)", fontsize=12, fontweight="bold")
     axes[-1].legend(fontsize=8)
     fig.suptitle("Ocean Temperature Profile", fontsize=16)
@@ -694,7 +808,7 @@ def plot_vertical_sections(
         for row, data, cmap_i, vmin, vmax in [
             (0, fom_mean, cmap, 0, 22),
             (1, rom_mean, cmap, 0, 22),
-            (2, err, "RdBu_r", -0.2, 0.2),
+            (2, err, "RdBu_r", -0.5, 0.5),
         ]:
             mesh = data.plot(
                 ax=axes[row, col],
@@ -720,16 +834,44 @@ def plot_vertical_sections(
     savefig(fig, outdir / "temperature_vertical_sections_timemean.png")
 
 
-def maybe_plot_psi(scenarios: list[Scenario], args: argparse.Namespace, outdir: Path) -> None:
-    psi_rom_path = Path(args.data_dir) / f"psi_rom_{args.center_opt}_{args.scale}_r{args.r}_{args.n_year_train}trainingyrs.nc"
-    if not psi_rom_path.exists():
-        print(f"Skipping psi plots; ROM psi file not found: {psi_rom_path}")
-        return
+def find_psi_rom_path(scenario: Scenario, args: argparse.Namespace) -> Path | None:
+    """Find a ROM psi file for one scenario, preferring scenario-specific outputs."""
+    data_dir = Path(args.data_dir)
+    base_suffix = f"{args.center_opt}_{args.scale}_r{args.r}_{args.n_year_train}trainingyrs.nc"
+    candidates = [
+        data_dir / f"psi_rom_{scenario.label}_{base_suffix}",
+        data_dir / f"psi_rom_{Path(scenario.rom_file).stem}_{base_suffix}",
+        data_dir / f"{Path(scenario.rom_file).stem}_psi.nc",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
 
+    legacy_path = data_dir / f"psi_rom_{base_suffix}"
+    if not legacy_path.exists():
+        return None
+
+    # The legacy mixed-forcing writer saves this single file from Q_ROM_ after
+    # the training loop, so it corresponds to the held-out/test trajectory.
+    if "test" in scenario.rom_file.lower() or "test" in scenario.label.lower():
+        print(f"Using legacy single ROM psi file for {scenario.label}: {legacy_path}")
+        return legacy_path
+
+    print(
+        f"Skipping ROM psi for {scenario.label}; found only the legacy single ROM psi file "
+        f"({legacy_path}), which is generated from the test trajectory."
+    )
+    return None
+
+
+def maybe_plot_psi(scenarios: list[Scenario], args: argparse.Namespace, outdir: Path) -> None:
     plot_data = []
     for scenario in scenarios:
         psi_fom_path = Path(scenario.fom_dir) / "psi_20yrs.nc"
         if not psi_fom_path.exists():
+            continue
+        psi_rom_path = find_psi_rom_path(scenario, args)
+        if psi_rom_path is None:
             continue
         psi = xr.open_dataset(psi_fom_path).isel(
             time=slice(0, 360 * (args.n_year_train + args.n_year_predict), args.n_days)
@@ -748,32 +890,24 @@ def maybe_plot_psi(scenarios: list[Scenario], args: argparse.Namespace, outdir: 
         plot_data.append((scenario.label, fom_monthly.isel(time=month_idx), rom_monthly.isel(time=month_idx)))
 
     if not plot_data:
-        print("Skipping psi plots; no scenario psi_20yrs.nc files found.")
+        print("Skipping psi plots; no matching FOM/ROM psi files found.")
         return
 
     n = len(plot_data)
-    fig, axes = plt.subplots(3, n, figsize=(4.4 * n, 9), squeeze=False, sharey=True)
+    fig, axes = plt.subplots(2, n, figsize=(4.4 * n, 6), squeeze=False, sharey=True)
     field_levels = np.arange(-90, 95, 10)
-    error_levels = np.arange(-45, 50, 5)
     last_field_mesh = None
-    last_error_mesh = None
     for col, (label, fom, rom) in enumerate(plot_data):
-        err = rom - fom
         for row, data, levels in [
             (0, fom, field_levels),
             (1, rom, field_levels),
-            (2, err, error_levels),
         ]:
             mesh = axes[row, col].contourf(data, cmap="RdBu_r", levels=levels, extend="both")
             axes[row, col].set_title(label if row == 0 else "")
-            if row == 2:
-                last_error_mesh = mesh
-            else:
-                last_field_mesh = mesh
-    for ax, row_label in zip(axes[:, 0], ["MITgcm", "ROM", "ROM - MITgcm"]):
+            last_field_mesh = mesh
+    for ax, row_label in zip(axes[:, 0], ["MITgcm", "ROM"]):
         ax.set_ylabel(row_label, fontsize=12)
-    fig.colorbar(last_field_mesh, ax=axes[:2, :].ravel().tolist(), shrink=0.75, label="Streamfunction [Sv]")
-    fig.colorbar(last_error_mesh, ax=axes[2, :].ravel().tolist(), shrink=0.75, label="Error [Sv]")
+    fig.colorbar(last_field_mesh, ax=axes.ravel().tolist(), shrink=0.75, label="Streamfunction [Sv]")
     fig.suptitle(f"Barotropic Streamfunction, Month {args.month_idx + 1}")
     savefig(fig, outdir / f"psi_month{args.month_idx + 1:02d}.png")
 
@@ -832,22 +966,24 @@ def load_surface_fields(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default=None, help="ROM training JSON file to use for evaluator defaults")
     parser.add_argument("--root-dir", default="/scratch/shoshi/soma4/dOpInf_results/")
     parser.add_argument("--data-dir", default=None, help="Directory containing Tr.npy and Q_ROM*.npy")
     parser.add_argument("--preproc-dir", default=None, help="Directory containing center*.nc files")
     parser.add_argument(
         "--training-dirs",
-        default="/scratch/shoshi/soma4/run_20yrs_tau0.1/,/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/",
+        default=None,
     )
-    parser.add_argument("--test-dir", default="/scratch/shoshi/soma4/run_20yrs_tau0.3/")
-    parser.add_argument("--scenario-labels", default="tau0.1,tau0.4,tau0.3-test")
-    parser.add_argument("--rom-files", default="Q_ROM_train_scenario_0.npy,Q_ROM_train_scenario_1.npy,Q_ROM_test3.npy")
-    parser.add_argument("--n-year-train", type=int, default=2)
-    parser.add_argument("--n-year-predict", type=int, default=0)
-    parser.add_argument("--n-days", type=int, default=1)
-    parser.add_argument("--center-opt", default="mean")
-    parser.add_argument("--scale", default="maxabs")
-    parser.add_argument("--r", type=int, default=26)
+    parser.add_argument("--test-dir", default=None)
+    parser.add_argument("--scenario-labels", default=None)
+    parser.add_argument("--rom-files", default=None)
+    parser.add_argument("--n-year-train", type=int, default=None)
+    parser.add_argument("--n-year-predict", type=int, default=None)
+    parser.add_argument("--n-days", type=int, default=None)
+    parser.add_argument("--center-opt", default=None)
+    parser.add_argument("--scale", default=None)
+    parser.add_argument("--r", type=int, default=None)
+    parser.set_defaults(target_ret_energy=None)
     parser.add_argument("--nx", type=int, default=248)
     parser.add_argument("--ny", type=int, default=248)
     parser.add_argument("--nz", type=int, default=31)
@@ -863,6 +999,24 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     args.root_dir = ensure_slash(args.root_dir)
+    args = apply_config_defaults(args)
+    args.n_year_train = 2 if args.n_year_train is None else args.n_year_train
+    args.n_year_predict = 0 if args.n_year_predict is None else args.n_year_predict
+    args.n_days = 1 if args.n_days is None else args.n_days
+    args.center_opt = args.center_opt or "mean"
+    args.scale = args.scale or "maxabs"
+    args.r = args.r or infer_r_from_data_dir(args.data_dir)
+    if args.data_dir is None and args.r is None and args.target_ret_energy is not None:
+        raise ValueError("Config uses target_ret_energy, so pass --data-dir with the completed ROM results directory.")
+    args.r = args.r or infer_r_from_tr(args.data_dir) or 26
+    args.training_dirs = (
+        args.training_dirs
+        or "/scratch/shoshi/soma4/run_20yrs_tau0.1/,/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/"
+    )
+    args.test_dir = args.test_dir or "/scratch/shoshi/soma4/run_20yrs_tau0.3/"
+    args.scenario_labels = args.scenario_labels or "tau0.1,tau0.4,tau0.3-test"
+    args.rom_files = args.rom_files or "Q_ROM_train_scenario_0.npy,Q_ROM_train_scenario_1.npy,Q_ROM_test3.npy"
+
     default_group = Path(args.root_dir) / "save_roms" / "taus_1_4"
     args.data_dir = ensure_slash(
         args.data_dir
@@ -921,6 +1075,7 @@ def main() -> None:
     plot_variability_maps(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.nx, args.ny, outdir)
     plot_variability_maps(fields_by_scenario, "T", "sst_fom", "sst_rom", args.nx, args.ny, outdir)
     plot_timeseries_locations(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.n_days, outdir)
+    plot_spatial_mean_timeseries(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.n_days, outdir)
     plot_timeseries_locations(fields_by_scenario, "T", "sst_fom", "sst_rom", args.n_days, outdir)
     plot_monthly_snapshots(fields_by_scenario, args.month_idx, args.n_days, args.nx, args.ny, outdir)
 

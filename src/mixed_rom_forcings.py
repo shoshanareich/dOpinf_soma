@@ -1,16 +1,30 @@
 from mpi4py import MPI
 import sys
 import os
+import time
+from datetime import datetime
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
+script_start = time.perf_counter()
+
+
+def log_timing(message, start_time=None):
+    if rank != 0:
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if start_time is None:
+        print(f"[timing] {stamp} | {message}", flush=True)
+    else:
+        elapsed = time.perf_counter() - start_time
+        print(f"[timing] {stamp} | {message} | elapsed {elapsed / 60:.2f} min ({elapsed:.1f} s)", flush=True)
 
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 os.environ["UCX_MEMTYPE_CACHE"] = "n"
 
-if rank == 0:
-    print(f"Ranks initialized: {size}. Starting library imports", flush=True)
+log_timing(f"mixed_rom_forcings.py start; ranks initialized: {size}")
+log_timing("Starting library imports")
 
 import numpy as np
 import xarray as xr
@@ -34,16 +48,11 @@ if MPI.COMM_WORLD.Get_rank() == 0:
     from plotting import ROMPlotter
     from forcing import *
     from learn_rom import TikhonovSweep
-    print("All modules loaded. Setting vars... ", flush=True)
+    log_timing("Library imports finished; setting vars", script_start)
 
 
 #root_dir = '/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/' 
 root_dir = '/scratch/shoshi/soma4/dOpInf_results/'
-snapshot_dirs = ['/scratch/shoshi/soma4/run_10yrspinup_tau0.1/',
-                    '/scratch/shoshi/soma4/run_10yrspinup_tau0.5/']
-
-#IC_dir = '/scratch/shoshi/soma4/run_20yrs_tau0.3/'
-test_dir = '/scratch/shoshi/soma4/run_10yrspinup_tau0.3/'
 
 ## spatial vars
 nx = 248
@@ -54,43 +63,41 @@ N = nx*ny*nz
 
 
 
-#### training config
+### training config
 
-# # Read in config file on rank 0 only 
-# if rank == 0:
-#     config_path = os.environ.get("ROM_CONFIG_PATH", os.path.join(root_dir, "config.json"))
-#     with open(config_path, 'r') as f:
-#         config = json.load(f)
-# else:
-#     config = None
+# Read in config file on rank 0 only 
+if rank == 0:
+    config_path = os.environ.get("ROM_CONFIG_PATH", os.path.join(root_dir, "config.json"))
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+else:
+    config = None
 
-# # Broadcast config to all ranks
-# config = comm.bcast(config, root=0)
+# Broadcast config to all ranks
+config = comm.bcast(config, root=0)
 
-# # Extract training options
-# n_year_train = config['n_year_train']
-# n_year_predict = config['n_year_predict']
-# n_days = config['n_days']
-# center_opt = config['center_opt']
-# scale = config['scale']
-
-# # check for target_ret_energy or r
-# target_ret_energy = config.get('target_ret_energy')
-# r = config.get('r')
-
-n_year_train = 5
-n_year_predict = 0
-n_days = 1
-center_opt = 'mean'
-scale = 'maxabs'
+# Extract training options
+n_year_train = config['n_year_train']
+n_year_predict = config['n_year_predict']
+n_days = config['n_days']
+center_opt = config['center_opt']
+scale = config['scale']
+dir_extension = config.get('dir_extension', 'default_extension')
+snapshot_dirs = config.get('snapshot_dirs', [])
+test_dir = config.get('test_dir', '')
 
 # check for target_ret_energy or r
-#target_ret_energy = 0.85
-target_ret_energy = None
-r = 20
+target_ret_energy = config.get('target_ret_energy')
+r = config.get('r')
 
 if (target_ret_energy is None and r is None) or (target_ret_energy is not None and r is not None):
     raise ValueError("Must define either 'target_ret_energy' OR 'r' in config.json")
+
+if not snapshot_dirs:
+    raise ValueError("Must define 'snapshot_dirs' in config.json with at least one snapshot directory")
+
+if not test_dir:
+    raise ValueError("Must define 'test_dir' in config.json")
 
 n_days_per_year = int(360 / n_days)
 nt = n_days_per_year * n_year_train 
@@ -104,7 +111,7 @@ if rank == 0:
 preproc_dir = None
 # Create the results directory
 if rank == 0:
-    preproc_dir = root_dir + 'save_roms/taus_1_5_sameIC/'
+    preproc_dir = root_dir + 'save_roms/' + dir_extension + '/'
     os.makedirs(preproc_dir, exist_ok=True)
 
 preproc_dir = comm.bcast(preproc_dir, root=0)
@@ -122,8 +129,13 @@ T_rank_list = []
 S_rank_list = []
 
 for snapshot_dir in snapshot_dirs:
-    ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="h5netcdf",  
-                        decode_timedelta=False, decode_times=False, chunks={})#, backend_kwargs={'driver': 'mpio'})
+    ds = xr.open_dataset(
+        snapshot_dir + 'states_20yrs.nc',
+        engine="h5netcdf",
+        decode_timedelta=False,
+        decode_times=False,
+        chunks={"time": min(360, 360 * n_year_train), "i": 8, "i_g": 8},
+    )  # , backend_kwargs={'driver': 'mpio'})
 
     U_rank, V_rank, Eta_rank, T_rank, S_rank = reshape_data(nx, n_days, n_year_train, ds, rank, size)
     
@@ -140,27 +152,54 @@ T_rank = np.hstack(T_rank_list)
 S_rank = np.hstack(S_rank_list)
 
 
-if rank == 0:
-    print("Training snapshots loaded. Starting shiftscale... ", flush=True)
+shiftscale_start = time.perf_counter()
+log_timing("Starting shiftscale")
+
+
+def gather_global_alpha(local_alpha, actual_nz, nx, ny, comm):
+    """Gather rank-local alpha vectors into the global flattened spatial order."""
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    alpha_arr = np.asarray(local_alpha)
+
+    if alpha_arr.ndim == 0 or alpha_arr.size == 1:
+        return float(alpha_arr.reshape(-1)[0]) if rank == 0 else None
+
+    local_vec = np.ascontiguousarray(alpha_arr.reshape(-1), dtype=np.float64)
+    all_pieces = comm.gather(local_vec, root=0)
+
+    if rank != 0:
+        return None
+
+    global_alpha = np.zeros(actual_nz * ny * nx, dtype=np.float64)
+    target = global_alpha.reshape((actual_nz, ny, nx))
+
+    for r, piece in enumerate(all_pieces):
+        i_start, i_end = slice_space(nx, r, size)
+        ni_local = i_end - i_start
+        target[:, :, i_start:i_end] = piece.reshape((actual_nz, ny, ni_local))
+
+    return global_alpha
+
 
 # center and scale data. immediately overwrite/delete the raw version
-U_rank_transform, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-T_rank, centerT, alphaT = shiftscale(T_rank, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-S_rank, centerS, alphaS = shiftscale(S_rank, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-
+U_rank_transform, centerU, alphaU = shiftscale(U_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+V_rank, centerV, alphaV = shiftscale(V_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+T_rank, centerT, alphaT = shiftscale(T_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+S_rank, centerS, alphaS = shiftscale(S_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
 
 ## save scaling
 alphas = {
-        "U": alphaU,
-        "V": alphaV,
-        "T": alphaT,
-        "S": alphaS,
-        "Eta": alphaEta,
-    }
+    "U": gather_global_alpha(alphaU, nz, nx, ny, comm),
+    "V": gather_global_alpha(alphaV, nz, nx, ny, comm),
+    "T": gather_global_alpha(alphaT, nz, nx, ny, comm),
+    "S": gather_global_alpha(alphaS, nz, nx, ny, comm),
+    "Eta": gather_global_alpha(alphaEta, 1, nx, ny, comm),
+}
 if rank == 0:
     np.save(preproc_dir + f"alpha_{center_opt}_{scale}_{n_year_train}yrs.npy", alphas)
+log_timing("Finished shiftscale", shiftscale_start)
 
 
 
@@ -172,35 +211,37 @@ SSS_rank_surf = S_rank[:pts_per_surf, :]
 SSU_rank_surf = U_rank_transform[:pts_per_surf, :] 
 
 # gather and save
-gather_and_save_surface(SST_rank_surf, 'SST', preproc_dir, nx, ny, rank, comm)
-gather_and_save_surface(SSS_rank_surf, 'SSS', preproc_dir, nx, ny, rank, comm)
-gather_and_save_surface(SSU_rank_surf, 'SSU', preproc_dir, nx, ny, rank, comm)
+if rank == 0:
+    print("Saving transformed surface fields...", flush=True)
+gather_and_save_surface(SST_rank_surf, f'SST_{center_opt}_{scale}_{n_year_train}yrs', preproc_dir, nx, ny, rank, comm)
+gather_and_save_surface(SSS_rank_surf, f'SSS_{center_opt}_{scale}_{n_year_train}yrs', preproc_dir, nx, ny, rank, comm)
+gather_and_save_surface(SSU_rank_surf, f'SSU_{center_opt}_{scale}_{n_year_train}yrs', preproc_dir, nx, ny, rank, comm)
 
 if rank == 0:
-    print("Surface save successful. Start stacking")
+    print("Surface save successful. Start stacking", flush=True)
 
+# Preserve the stacked matrix math while avoiding a full explicit stack.
+Q_rank = [U_rank_transform, V_rank, Eta_rank, T_rank, S_rank]
 
-Q_rank = np.vstack([U_rank_transform, V_rank, Eta_rank, T_rank, S_rank])
-
-## clean up 
-del U_rank_transform, V_rank, Eta_rank, T_rank, S_rank
-gc.collect()
-
+streamfunction_jobs = None
+svd_start = time.perf_counter()
 if rank ==0:
-    print('snapshot matrix compiled. starting SVD...')
-    sval_dir = root_dir + '/svals/taus_1_5_sameIC/'
+    log_timing("Starting SVD")
+    sval_dir = root_dir + '/svals/' + dir_extension + '/'
     os.makedirs(sval_dir, exist_ok=True)
 
 ### SVD
 
-if 'target_ret_energy' in locals():
+if target_ret_energy is not None:
     svd = SVDDecomposition(Q_rank, comm, target_ret_energy=target_ret_energy)
-elif 'r' in locals():
-    svd = SVDDecomposition(Q_rank, comm, r=45)
+elif r is not None:
+    svd = SVDDecomposition(Q_rank, comm, r=r)
 else:
     raise ValueError("Neither 'r' nor 'target_ret_energy' was defined.")
 svd.compute()
-
+log_timing("Finished SVD", svd_start)
+del Q_rank
+gc.collect()
 
 ###### parallel matrix multiplication to project ICs
 # read in new IC and shiftscale based on training data
@@ -217,22 +258,25 @@ svd.compute()
 # q0_ = svd.Tr_global.T @ IC_global
 
 ## if using same IC for all:
-q0_ = svd.Qhat_global[:,0]
+q0_ = None
+if rank == 0:
+    q0_ = svd.Qhat_global[:, 0]
 
 
 
 results_dir = None
 # Create the results directory
 if rank == 0:
-    results_dir = root_dir + 'save_roms/taus_1_5_sameIC/' +f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}/'
+    results_dir = root_dir + 'save_roms/' + dir_extension + '/' +f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}/'
     os.makedirs(results_dir, exist_ok=True)
     print(f"Results directory created: {results_dir}", flush=True)
     
     # Get Slurm Array ID and Task ID, default to PID if not in a Slurm environment
     job_id = os.environ.get("SLURM_ARRAY_JOB_ID", "local")
     task_id = os.environ.get("SLURM_ARRAY_TASK_ID", os.getpid())
+    pointer_dir = os.environ.get("ROM_POINTER_DIR", os.getcwd())
     
-    temp_file = f".results_path_{job_id}_{task_id}"
+    temp_file = os.path.join(pointer_dir, f".results_path_{job_id}_{task_id}")
     
     with open(temp_file, "w") as f:
         f.write(results_dir)
@@ -285,9 +329,9 @@ if rank ==0:
 
     ### transform forcings
     
-    SST_transformed_global = np.load(preproc_dir + 'SST_transformed_surface.npy')
-    SSS_transformed_global = np.load(preproc_dir + 'SSS_transformed_surface.npy')
-    SSU_transformed_global = np.load(preproc_dir + 'SSU_transformed_surface.npy')
+    SST_transformed_global = np.load(preproc_dir + f'SST_{center_opt}_{scale}_{n_year_train}yrs_transformed_surface.npy')
+    SSS_transformed_global = np.load(preproc_dir + f'SSS_{center_opt}_{scale}_{n_year_train}yrs_transformed_surface.npy')
+    SSU_transformed_global = np.load(preproc_dir + f'SSU_{center_opt}_{scale}_{n_year_train}yrs_transformed_surface.npy')
 
     B, C = project_surface_forcings_multiple(SST_transformed_global, SSS_transformed_global, SSU_transformed_global, svd.Tr_global, forcings)
 
@@ -341,18 +385,33 @@ if rank ==0:
     model = sweep.fit_best_model()
     model.model.save(results_dir + 'model.h5', overwrite=True)
 
+    # Generate scenario labels from snapshot directory names
+    # Extract meaningful names from full paths (e.g., 'run_10yrspinup_tau0.1/' -> 'tau0.1')
+    scenario_labels = []
+    for snap_dir in snapshot_dirs:
+        # Clean up path and extract last component
+        clean_path = snap_dir.rstrip('/')
+        dir_name = clean_path.split('/')[-1]
+        scenario_labels.append(dir_name)
+    
+    test_label = test_dir.rstrip('/').split('/')[-1]
+
     # predict for all training scenarios
     inputs_list_predict = [build_rom_inputs(Tmax, tau1, n_year_train + n_year_predict, n_days),
                     build_rom_inputs(Tmax, tau4, n_year_train + n_year_predict, n_days)]
     
+    streamfunction_jobs = []
     for i, (Q_, u_in) in enumerate(zip(states_list, inputs_list_predict)):
         Q0 = Q_[:, 0]
         
         Q_rec = model.predict(Q0, niters= int((n_year_train + n_year_predict)* 360 / n_days), inputs=u_in)
         
-        # Save each reconstruction
-        np.save(results_dir + f'Q_ROM_train_scenario_{i}.npy', Q_rec)
-        print(f"Reconstructed and saved training scenario {i}")
+        # Save each reconstruction with descriptive name
+        scenario_name = scenario_labels[i] if i < len(scenario_labels) else f'scenario_{i}'
+        q_rom_stem = f'Q_ROM_train_{scenario_name}'
+        np.save(results_dir + f'{q_rom_stem}.npy', Q_rec)
+        streamfunction_jobs.append((q_rom_stem, Q_rec))
+        print(f"Reconstructed and saved training scenario {i} ({scenario_name})")
 
     # predict for unseen case
     tau = F.compute_wind_seasonal_amplitude(max_val=0.3)
@@ -361,8 +420,10 @@ if rank ==0:
 
     ## using projected q0 
     # OR can use Q0 from training scenario, looking at how well we can drift ##
-    Q_ROM_ = model.predict(q0_[:,0], niters = int((n_year_train + n_year_predict)* 360 / n_days), inputs=inputs_new)
-    np.save(results_dir + f'Q_ROM_test3.npy', Q_ROM_)
+    Q_ROM_ = model.predict(q0_, niters = int((n_year_train + n_year_predict)* 360 / n_days), inputs=inputs_new)
+    q_rom_stem = f'Q_ROM_test_{test_label}'
+    np.save(results_dir + f'{q_rom_stem}.npy', Q_ROM_)
+    streamfunction_jobs.append((q_rom_stem, Q_ROM_))
 
 
 comm.Barrier()
@@ -374,25 +435,42 @@ comm.Barrier()
 grid = read_grid(comm, '/scratch/shoshi/soma4/grid/')
 
 if rank ==0:
-    print('compute barotropic streamfunction')
+    streamfunction_total_start = time.perf_counter()
+    log_timing('Starting barotropic streamfunction for each scenario')
+else:
+    streamfunction_total_start = None
 
-Q_ROM_val = Q_ROM_ if rank == 0 else None
-
-compute_barotropic_streamfunction(
-    comm=comm,
-    grid=grid,
-    U_rank=U_rank,
-    centerU=centerU,
-    svd=svd,
-    Q_ROM_val=Q_ROM_val,
-    nx=nx,
-    ny=ny,
-    nz=nz,
-    root_dir=results_dir,
-    center_opt=center_opt,
-    scale_type = scale,
-    n_year_train=n_year_train
+streamfunction_labels = comm.bcast(
+    [label for label, _ in streamfunction_jobs] if rank == 0 else None,
+    root=0,
 )
+
+for job_idx, output_label in enumerate(streamfunction_labels):
+    streamfunction_scenario_start = time.perf_counter()
+    if rank == 0:
+        log_timing(f'Starting barotropic streamfunction: {output_label}')
+    Q_ROM_val = streamfunction_jobs[job_idx][1] if rank == 0 else None
+
+    compute_barotropic_streamfunction(
+        comm=comm,
+        grid=grid,
+        U_rank=U_rank,
+        centerU=centerU,
+        svd=svd,
+        Q_ROM_val=Q_ROM_val,
+        nx=nx,
+        ny=ny,
+        nz=nz,
+        root_dir=results_dir,
+        center_opt=center_opt,
+        scale_type=scale,
+        n_year_train=n_year_train,
+        output_label=output_label,
+    )
+    log_timing(f'Finished barotropic streamfunction: {output_label}', streamfunction_scenario_start)
+
+log_timing('Finished all barotropic streamfunctions', streamfunction_total_start)
+log_timing('mixed_rom_forcings.py finished', script_start)
 
 
 

@@ -91,8 +91,13 @@ if rank == 0:
 
 ## split data and select training snapshots
 
-ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', engine="h5netcdf",  
-                    decode_timedelta=False, decode_times=False, chunks={})#, backend_kwargs={'driver': 'mpio'})
+ds = xr.open_dataset(
+    snapshot_dir + 'states_20yrs.nc',
+    engine="h5netcdf",
+    decode_timedelta=False,
+    decode_times=False,
+    chunks={"time": min(360, 360 * n_year_train), "i": 8, "i_g": 8},
+)  # , backend_kwargs={'driver': 'mpio'})
 
 U_rank, V_rank, Eta_rank, T_rank, S_rank = reshape_data(nx, n_days, n_year_train, ds, rank, size)
 
@@ -165,11 +170,8 @@ if rank == 0:
 if rank ==0:
     print('start stacking')#
 
-Q_rank = np.vstack([U_rank_transform, V_rank, Eta_rank, T_rank, S_rank])
-
-## clean up 
-del U_rank_transform, V_rank, Eta_rank, T_rank, S_rank
-gc.collect()
+# Preserve the stacked matrix math while avoiding a full explicit stack.
+Q_rank = [U_rank_transform, V_rank, Eta_rank, T_rank, S_rank]
 
 if rank ==0:
     print('snapshot matrix compiled. starting SVD...')
@@ -183,6 +185,9 @@ elif 'r' in locals():
 else:
     raise ValueError("Neither 'r' nor 'target_ret_energy' was defined.")
 svd.compute()
+
+del Q_rank
+gc.collect()
 
 sval_dir = root_dir + '/svals/'
 

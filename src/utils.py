@@ -58,6 +58,14 @@ def reshape_data(nx, n_days, n_year_train, ds, rank, size, zero_zone_end=0): #pr
     T_rank = T_rank.where(T_rank.i >= zero_zone_end, 0)
     S_rank = S_rank.where(S_rank.i >= zero_zone_end, 0)
 
+    def _rechunk_snapshot(arr, time_chunk=360):
+        if hasattr(arr, 'rechunk'):
+            try:
+                return arr.rechunk({1: min(time_chunk, int(arr.shape[1]))})
+            except Exception:
+                return arr
+        return arr
+
     ## 3. Reshape for Q[space_stacked, time]
     # Note: Using .data at the end converts to the underlying Dask array
     U_rank = U_rank.stack(space=('k', 'j', 'i_g')).T.data
@@ -65,6 +73,12 @@ def reshape_data(nx, n_days, n_year_train, ds, rank, size, zero_zone_end=0): #pr
     Eta_rank = Eta_rank.stack(space=('j', 'i')).T.data
     T_rank = T_rank.stack(space=('k', 'j', 'i')).T.data
     S_rank = S_rank.stack(space=('k', 'j', 'i')).T.data
+
+    U_rank = _rechunk_snapshot(U_rank)
+    V_rank = _rechunk_snapshot(V_rank)
+    Eta_rank = _rechunk_snapshot(Eta_rank)
+    T_rank = _rechunk_snapshot(T_rank)
+    S_rank = _rechunk_snapshot(S_rank)
 
     return U_rank, V_rank, Eta_rank, T_rank, S_rank
 
@@ -200,6 +214,9 @@ def extract_surface(rank_data, rank, size, nx=248, ny=248, nz=31):
 
 
 def gather_and_save_surface(local_surf_dask, name, preproc_dir, nx, ny, rank, comm):
+    if rank == 0:
+        print(f"Starting {name} surface compute/gather/save", flush=True)
+
     # Compute LOCALLY first
     local_surf_np = local_surf_dask.compute() 
     
@@ -228,7 +245,7 @@ def gather_and_save_surface(local_surf_dask, name, preproc_dir, nx, ny, rank, co
         #  Save as .npy file
         save_path = f"{preproc_dir}{name}_transformed_surface.npy"
         np.save(save_path, global_surf_2d)
-        print(f"Successfully saved {name} surface. Final shape: {global_surf_2d.shape}")
+        print(f"Successfully saved {name} surface. Final shape: {global_surf_2d.shape}", flush=True)
 
 
 
@@ -263,8 +280,10 @@ def transform_and_project_k(snapshot_dirs, var, n_year_train, n_days, center_opt
       
     S_FOM_train = np.hstack(S_FOM_train_all)
 
-    center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
-    alphas = np.load(root_dir + f'/preproc/alpha_{center_opt}_{scale}_{n_year_train}yrs.npy', allow_pickle=True).item()
+   #center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+   # alphas = np.load(root_dir + f'/preproc/alpha_{center_opt}_{scale}_{n_year_train}yrs.npy', allow_pickle=True).item()
+    center_da = xr.open_dataset(root_dir + f'save_roms/taus_1_5_sameIC/center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+    alphas = np.load(root_dir + f'save_roms/taus_1_5_sameIC/alpha_{center_opt}_{scale}_{n_year_train}yrs.npy', allow_pickle=True).item()
     alpha = alphas[var]
     if not anom: # add center back in 
         if center_opt == 'global_mean':
@@ -315,7 +334,9 @@ def transform_and_project_lon(snapshot_dirs, var, n_year_train, n_days, center_o
     S_FOM_train = np.hstack(S_FOM_train_all)
 
 
-    center_da = xr.open_dataset(preproc_dir + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+ #   center_da = xr.open_dataset(preproc_dir + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+    center_da = xr.open_dataset(root_dir + f'save_roms/taus_1_5_sameIC/center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+   # alphas = np.load(root_dir + f'save_roms/taus_1_5_sameIC/alpha_{center_opt}_{scale}_{n_year_train}yrs.npy', allow_pickle=True).item()
     center = center_da.center.values.reshape(nz, ny, nx)
     center = center[:, :, i].ravel()
 
@@ -389,12 +410,14 @@ def load_var_fom_lon(snapshot_dir, var, n_year_train, n_year_predict, n_days, ro
     else:
         var_FOM = ds[var].isel(i=i,time=slice(0, 360*(n_year_train + n_year_predict), n_days)).stack(space=('k', 'j')).T
   
-    center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+    #center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+    center_da = xr.open_dataset(root_dir + f'save_roms/taus_1_5_sameIC/center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
     center = center_da.center.values.reshape(nz, ny, nx)
     center = center[:, :, i].ravel()
 
     if anom:
-        center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+        #center_da = xr.open_dataset(root_dir + 'preproc/' + f'center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
+        center_da = xr.open_dataset(root_dir + f'save_roms/taus_1_5_sameIC/center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc', engine='netcdf4')
         if center_opt == 'global_mean':
             center = center_da.center
             var_FOM = (var_FOM - center.values) #/ alpha
@@ -452,7 +475,8 @@ def read_grid(comm, grid_path='/scratch/shoshi/soma4/grid/'):
 
 def compute_barotropic_streamfunction(
     comm, grid, U_rank, centerU, svd, Q_ROM_val,
-    nx, ny, nz, root_dir, center_opt, scale_type, n_year_train
+    nx, ny, nz, root_dir, center_opt, scale_type, n_year_train,
+    output_label=None
 ):
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -511,7 +535,8 @@ def compute_barotropic_streamfunction(
             name='u_bt'
         )
 
-        path = f"{root_dir}/u_bt_rom_{center_opt}_{scale_type}_r{svd.r}_{n_year_train}trainingyrs.nc"
+        label = f"{output_label}_" if output_label else ""
+        path = f"{root_dir}/u_bt_rom_{label}{center_opt}_{scale_type}_r{svd.r}_{n_year_train}trainingyrs.nc"
         u_bt_da.to_netcdf(path)
 
         # --- 7. Streamfunction ---
@@ -525,10 +550,10 @@ def compute_barotropic_streamfunction(
             name='psi'
         )
 
-        psi_path = f"{root_dir}/psi_rom_{center_opt}_{scale_type}_r{svd.r}_{n_year_train}trainingyrs.nc"
+        psi_path = f"{root_dir}/psi_rom_{label}{center_opt}_{scale_type}_r{svd.r}_{n_year_train}trainingyrs.nc"
         psi_da.to_netcdf(psi_path)
 
-        print("saved barotropic fields", flush=True)
+        print(f"saved barotropic fields: {psi_path}", flush=True)
 
     # --- 8. HARD synchronization point ---
     comm.Barrier()
@@ -555,7 +580,5 @@ def get_new_IC(snapshot_dir, centers, alphas, n_year_train, n_days, rank, size, 
     IC_rank = np.vstack([U0_rank, V0_rank, Eta0_rank, T0_rank, S0_rank])
     
     return IC_rank
-
-
 
 

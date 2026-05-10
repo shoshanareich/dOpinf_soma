@@ -37,18 +37,46 @@ class SVDDecomposition:
         """Compute global SVD quantities and store results as attributes."""
         comm = self.comm
         rank = comm.Get_rank()
+        if rank == 0:
+            print("[SVD] Starting local Gram matrix assembly", flush=True)
 
-        # Ensure Q_rank is NumPy (SVD should not be dask)
-        if hasattr(self.Q_rank, "compute"):
-            Q_local = self.Q_rank.compute()
+        def _block_gram(block):
+            """
+            Compute the local Gram contribution for one row block.
+            If dask, break into 4,096 × n_t slices for memory efficiency
+            """
+            if hasattr(block, "chunks"):
+                try:
+                    block = block.rechunk({0: min(4096, int(block.shape[0]))})
+                except Exception:
+                    pass
+
+                D_block = None
+                for i in range(block.numblocks[0]):
+                    row_chunk = block.blocks[i, :].compute()
+                    gram = row_chunk.T @ row_chunk
+                    if D_block is None:
+                        D_block = gram
+                    else:
+                        D_block += gram
+                return D_block
+
+            return block.T @ block
+
+        if isinstance(self.Q_rank, (list, tuple)):
+            D_rank = None
+            for block in self.Q_rank:
+                D_block = _block_gram(block)
+                if D_rank is None:
+                    D_rank = D_block
+                else:
+                    D_rank += D_block
         else:
-            Q_local = self.Q_rank
-
-        # Local Gram matrix
-        D_rank = Q_local.T @ Q_local
-        del Q_local  # free memory early
+            D_rank = _block_gram(self.Q_rank)
 
         # Global reduction
+        if rank == 0:
+            print("[SVD] Local Gram complete. Starting MPI allreduce", flush=True)
         if rank == 0:
             self.D_global = np.empty_like(D_rank)
         else:
@@ -59,6 +87,7 @@ class SVDDecomposition:
         del D_rank
 
         if rank ==0:
+            print("[SVD] Allreduce complete. Starting eigendecomposition", flush=True)
 
             # Eigendecomposition
             eigs, eigv = np.linalg.eigh(self.D_global)
@@ -73,25 +102,30 @@ class SVDDecomposition:
 
             # Rank r that satisfies target energy or desired r
             if self.target_ret_energy is not None:
-                self.r = np.argmax(self.ret_energy >= self.target_ret_energy) #+ 1
+                self.r = np.argmax(self.ret_energy >= self.target_ret_energy)
             elif self.r is not None:
                 self.r = self.r
-            else: 
-                self.r = len(self.eigs) # Fallback to prevent hang: use full rank and warn
+            else:
+                self.r = len(self.eigs)
                 print('Warning: Neither r nor target_ret_energy specified. Using full rank.')
 
             # Tr matrix and reduced coordinates
             self.Tr_global = self.eigv[:, :self.r] @ np.diag(self.eigs[:self.r]**(-0.5))
-            self.Qhat_global = self.Tr_global.T @ self.D_global
+            self.Qhat_global = np.diag(np.sqrt(self.eigs[:self.r])) @ self.eigv[:, :self.r].T
+            print(f"[SVD] Eigendecomposition complete. Selected r={self.r}", flush=True)
         else:
             self.eigs = None
             self.eigv = None
             self.ret_energy = None
             self.Tr_global = None
+            self.Qhat_global = None
 
         # Broadcast results to all ranks
         self.r = comm.bcast(self.r, root=0)
         self.Tr_global = comm.bcast(self.Tr_global, root=0)
+        self.Qhat_global = comm.bcast(self.Qhat_global, root=0)
+        if rank == 0:
+            print("[SVD] Broadcast complete", flush=True)
 
         return self
 
@@ -173,5 +207,4 @@ class SVDDecomposition:
 
       #  np.save(f"{outdir}/{prefix}_eigv.npy", self.eigv)
       #  np.save(f"{outdir}/{prefix}_r.npy", np.array([self.r]))
-
 
