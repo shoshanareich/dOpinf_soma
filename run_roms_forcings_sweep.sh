@@ -5,7 +5,7 @@
 #SBATCH --nodes=4
 #SBATCH --ntasks=62
 #SBATCH --time=12:00:00
-#SBATCH --array=1-2%2
+#SBATCH --array=3-6%4
 
 source activate opinf_mixed
 

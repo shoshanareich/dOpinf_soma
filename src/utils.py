@@ -493,28 +493,38 @@ def compute_barotropic_streamfunction(
     svd.Tr_global = svd.Tr_global.astype(np.float32, copy=False)
     Q_ROM_val = Q_ROM_val.astype(np.float32, copy=False)
 
-    # Local reconstruction of U_ROM
-    Uc = U_rank - centerU[:, None]
-    V_u = Uc @ svd.Tr_global
-    U_ROM_rank = V_u @ Q_ROM_val
-    U_ROM_rank += centerU[:, None]
-
     # Local domain split of nx
     i_start, i_end = slice_space(nx, rank, size)
     nx_local = i_end - i_start
-    nt = U_ROM_rank.shape[1]
+    nxy_local = ny * nx_local
+    nt_train = U_rank.shape[1]
+    nt = Q_ROM_val.shape[1]
 
-    # Reshape to 4d
-    U_ROM_rank_3d = U_ROM_rank.reshape(nz, ny, nx_local, nt)
+    # Depth integration is linear, so integrate the training snapshots first:
+    # W @ (centerU + (U_rank - centerU) @ Tr @ Q_ROM), without forming full U_ROM.
+    centerU = np.asarray(centerU, dtype=np.float32)
+    weights = (
+        grid['hFacW'][:, :, i_start:i_end].astype(np.float32, copy=False)
+        * grid['DRF'][:, None, None].astype(np.float32, copy=False)
+    )
 
-    # --- 5. Depth integration ---
-    hFacW = grid['hFacW'][:, :, i_start:i_end]
-    drF = grid['DRF'][:, None, None]
+    U_bt_train = np.zeros((nxy_local, nt_train), dtype=np.float32)
+    center_bt = np.zeros(nxy_local, dtype=np.float32)
 
-    weights = hFacW * drF
-    u_bt_rank = np.sum(U_ROM_rank_3d * weights[..., None], axis=0)
+    for k in range(nz):
+        z_slice = slice(k * nxy_local, (k + 1) * nxy_local)
+        wk = weights[k].reshape(-1)
+        center_k = centerU[z_slice]
 
-    del U_ROM_rank, U_ROM_rank_3d
+        U_bt_train += wk[:, None] * (U_rank[z_slice] - center_k[:, None])
+        center_bt += wk * center_k
+
+    V_bt = U_bt_train @ svd.Tr_global
+    u_bt_rank = V_bt @ Q_ROM_val
+    u_bt_rank += center_bt[:, None]
+    u_bt_rank = u_bt_rank.reshape(ny, nx_local, nt)
+
+    del U_bt_train, V_bt, weights
     gc.collect()
 
     # --- 6. Gather ---
@@ -580,5 +590,4 @@ def get_new_IC(snapshot_dir, centers, alphas, n_year_train, n_days, rank, size, 
     IC_rank = np.vstack([U0_rank, V0_rank, Eta0_rank, T0_rank, S0_rank])
     
     return IC_rank
-
 

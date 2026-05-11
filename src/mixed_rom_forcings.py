@@ -304,6 +304,7 @@ if rank ==0:
 
     ## compute reduced forcings
     print('compute forcings')
+    forcings_start = time.perf_counter()
 
     F = OceanForcing(
         grid_dir='/scratch/shoshi/soma4/grid/',
@@ -334,6 +335,7 @@ if rank ==0:
     SSU_transformed_global = np.load(preproc_dir + f'SSU_{center_opt}_{scale}_{n_year_train}yrs_transformed_surface.npy')
 
     B, C = project_surface_forcings_multiple(SST_transformed_global, SSS_transformed_global, SSU_transformed_global, svd.Tr_global, forcings)
+    log_timing('Finished compute forcings', forcings_start)
 
     ## ROM inputs
 
@@ -349,6 +351,7 @@ if rank ==0:
 
 
     print('learn ROM')
+    rom_learning_start = time.perf_counter()
 
     # learn ROM!
     n_train_H = 20
@@ -384,6 +387,7 @@ if rank ==0:
     # build final model with best reg params
     model = sweep.fit_best_model()
     model.model.save(results_dir + 'model.h5', overwrite=True)
+    log_timing('Finished ROM learning', rom_learning_start)
 
     # Generate scenario labels from snapshot directory names
     # Extract meaningful names from full paths (e.g., 'run_10yrspinup_tau0.1/' -> 'tau0.1')
@@ -403,8 +407,11 @@ if rank ==0:
     streamfunction_jobs = []
     for i, (Q_, u_in) in enumerate(zip(states_list, inputs_list_predict)):
         Q0 = Q_[:, 0]
-        
+
+        prediction_start = time.perf_counter() if i == 0 else None
         Q_rec = model.predict(Q0, niters= int((n_year_train + n_year_predict)* 360 / n_days), inputs=u_in)
+        if i == 0:
+            log_timing('Finished one ROM prediction', prediction_start)
         
         # Save each reconstruction with descriptive name
         scenario_name = scenario_labels[i] if i < len(scenario_labels) else f'scenario_{i}'
@@ -471,102 +478,3 @@ for job_idx, output_label in enumerate(streamfunction_labels):
 
 log_timing('Finished all barotropic streamfunctions', streamfunction_total_start)
 log_timing('mixed_rom_forcings.py finished', script_start)
-
-
-
-
-#region OLD PLOT CODE
-
-
-    # read in FOM for comparison
-#    ds = xr.open_dataset(snapshot_dir + 'states_20yrs.nc', decode_timedelta=False, chunks={}) 
- #   Eta = ds['Eta'].isel(time=slice(0, 360*(n_year_train + n_year_predict)+1, n_days))
-
-#     Eta_train = Eta.isel(time=slice(0, int(360/n_days)*n_year_train+1))
-
-#     #S_Eta = Eta_train.stack(space=('j', 'i')).T
-#     S_Eta_train = Eta_train.stack(space=('j', 'i')).T
-#     S_Eta = Eta.stack(space=('j', 'i')).T
-
-#     # alpha = abs(S_Eta).max().values
-
-#     # if center_opt == 'mean':
-#     #     center = S_Eta.mean(dim='time').values
-#     # elif center_opt == 'IC':
-#     #     center = S_Eta.isel(time=0).values
-#     # elif center_opt == 'seasonal':
-#     #     center = S_Eta.rolling(time=30, center=True, min_periods=1).mean()
-#     # elif center_opt == 'monthly':
-#     #     # build synthetic month index: 0..11
-#     #     month = ((S_Eta['time'] % (360*24*3600)) // (30*24*3600)).astype(int)
-#     #     # attach month as a coordinate
-#     #     Etam = S_Eta.assign_coords(month=('time', month.data))
-#     #     # monthly climatology (mean across all years)
-#     #     monthly_mean = Etam.groupby('month').mean(dim='time')
-#     #     # broadcast back to full time axis
-#     #     center = monthly_mean.sel(month=Etam['month'])
-#     # else:
-#     #     center = np.zeros_like(S_Eta.isel(time=0).values)
-
-#     ## compared processed FOM and ROM
-#    # S_Eta, _, _ = shiftscale(S_Eta, center_type=center_opt)
-
-#     center_train = S_Eta_train.rolling(time=30, center=True, min_periods=1).mean()
-
-#     doy_train = (center_train['time'] % (360*24*3600)) // (24*3600) + 1
-#     Ctrain = center_train.assign_coords(dayofyear=('time', doy_train.data))
-
-#     center_clim = Ctrain.groupby('dayofyear').mean('time')
-#     doy_full = (S_Eta['time'] % (360*24*3600)) // (24*3600) + 1
-#     center_full = center_clim.sel(dayofyear=doy_full).drop_vars('dayofyear')
-
-
-#     ## get centering and scaling of training data to transform back
-#    # _, center, alphaEta = shiftscale(S_Eta_train, comm=None, center_type=center_opt)
-
-
-
-# # project back to high-dimensional space and de-transform data (centering and scaling)
-# Eta_transformed = gather_distributed_array(Eta_rank_transformed.values, comm, root=0)
-# centerEta_global = gather_distributed_array(centerEta.values, comm, root=0)
-
-# if rank == 0:
-#     print(f"Reconstruction complete. Global shape: {Eta_transformed.shape}")
-
-#     nt_total = (n_year_train + n_year_predict)*int(360/n_days)+1
-
-#     Vr = np.matmul(Eta_transformed, svd.Tr_global)
-#     Eta_ROM = Vr @ Q_ROM_ * alphaEta + centerEta_global
-
-#     Eta_ROM_3d = Eta_ROM.values.T.reshape(Eta_ROM.shape[1], nx, ny) 
-
-#     abs_err, norm_err = opinf.post.lp_error(S_Eta, Eta_ROM, normalize=True)
-#     ymax= np.nanmax(norm_err)
-
-    
-    
-
-#     # plots!
-#     Eta_ROM_3d_predict = Eta_ROM_3d[n_year_train*int(360/n_days)+1:]
-#     Eta_ROM_monthlymean = Eta_ROM_3d_predict.reshape(n_year_predict*12, int(30/n_days), nx, nx).mean(axis=1)  # monthly mean
-
-
-#     Eta_FOM_monthlymean = (Eta[n_year_train*int(360/n_days)+1:].values).reshape(n_year_predict*12, int(30/n_days), nx, nx).mean(axis=1)
-    
-
-#     save_dir = '/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/plots/'
-
-#     plotter = ROMPlotter(Q_fom=Eta, Q_rom=Eta_ROM_3d, r=svd.r,
-#                      n_year_train=n_year_train, n_year_predict=n_year_predict,
-#                      n_days=n_days, n_days_per_year=n_days_per_year)
-
-#     plotter.plot_rel_l2_error(save_path=save_dir+f"rel_l2_error_r{svd.r}_{center_opt}_{n_year_train}yrs.png")
-#     plotter.plot_timeseries_locations(save_path=save_dir+f"ssh_timeseries_r{svd.r}_{center_opt}_{n_year_train}yrs.png")
-#     plotter.plot_monthly_avg(Eta_ROM_monthlymean, Eta_FOM_monthlymean, month_idx=12, save_path=save_dir+f"monthly_avg_r{svd.r}_{center_opt}_{n_year_train}yrs.png")
-
-#     vid = plotter.animate_monthly(Eta_ROM_monthlymean, Eta_FOM_monthlymean, timesteps=range(Eta_FOM_monthlymean.shape[0]))
-#     HTML(vid.to_jshtml())
-#     vid.save(save_dir +f'monthly_avg_r{svd.r}_{center_opt}_{n_year_train}yrs.gif')
-
-
-#endregion

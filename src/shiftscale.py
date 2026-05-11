@@ -6,6 +6,7 @@ from utils import gather_distributed_array, slice_space
 from scipy.signal import convolve2d
 import dask.array as da
 import os
+import time
 
 
 def ensure_time_chunks(Q_rank, target_time_chunk=360):
@@ -102,6 +103,11 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
 
     n_space, n_time = Q_rank.shape
     rank = comm.Get_rank() if comm else 0
+
+    def log_elapsed(message, start_time):
+        if rank == 0:
+            elapsed = time.perf_counter() - start_time
+            print(f"[shiftscale] {message} | elapsed {elapsed / 60:.2f} min ({elapsed:.1f} s)", flush=True)
     
     center_ref = None
 
@@ -166,6 +172,7 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
 
     # ---------- COMPUTE CENTER ----------
     if center_ref is None:
+        center_start = time.perf_counter()
         if center_type == 'mean':
             center_ref = da.mean(Q_rank, axis=1).compute()  # (space,)
         
@@ -191,10 +198,13 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
         else:
             print("No centering specified, not centering")
             center_ref = 0
+        log_elapsed(f"Compute center complete ({center_type})", center_start)
 
         # Save reference (SAFE)
         if save_file:
+            save_center_start = time.perf_counter()
             save_center_ref(center_ref, save_file, comm, center_type, nx=nx, ny=ny, nz=nz)
+            log_elapsed(f"Save center complete ({center_type})", save_center_start)
 
     # ---------- SHIFT ----------
     if center_type == 'global_mean':
@@ -209,6 +219,7 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
         Q_shifted = Q_rank - center_ref[:, t_idx]
 
     # ---------- SCALE BASED ON SHIFTED DATA ----------
+    scale_start = time.perf_counter()
     if scale_type is not None:
         alpha = scalefactor(Q_shifted, scale_type, comm)
         if np.ndim(alpha) == 1:
@@ -216,6 +227,7 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
             alpha = alpha[:, np.newaxis]
     else:
         alpha = 1
+    log_elapsed(f"Scale factor complete ({scale_type})", scale_start)
 
     # ---------- FINAL TRANSFORM ----------
     Q_rank = Q_shifted / alpha

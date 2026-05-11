@@ -1,6 +1,7 @@
 from mpi4py import MPI
 import matplotlib.pyplot as plt
 import numpy as np
+import time
 
 
 class SVDDecomposition:
@@ -37,6 +38,12 @@ class SVDDecomposition:
         """Compute global SVD quantities and store results as attributes."""
         comm = self.comm
         rank = comm.Get_rank()
+
+        def _format_elapsed(start_time):
+            elapsed = time.perf_counter() - start_time
+            return f"elapsed {elapsed / 60:.2f} min ({elapsed:.1f} s)"
+
+        local_gram_start = time.perf_counter()
         if rank == 0:
             print("[SVD] Starting local Gram matrix assembly", flush=True)
 
@@ -76,20 +83,22 @@ class SVDDecomposition:
 
         # Global reduction
         if rank == 0:
-            print("[SVD] Local Gram complete. Starting MPI allreduce", flush=True)
+            print(f"[SVD] Local Gram complete. Starting MPI allreduce | {_format_elapsed(local_gram_start)}", flush=True)
         if rank == 0:
             self.D_global = np.empty_like(D_rank)
         else:
             self.D_global = None
 
         # Use low-level Allreduce (buffer-based)
+        allreduce_start = time.perf_counter()
         self.D_global = comm.allreduce(D_rank, op=MPI.SUM)
         del D_rank
 
         if rank ==0:
-            print("[SVD] Allreduce complete. Starting eigendecomposition", flush=True)
+            print(f"[SVD] Allreduce complete. Starting eigendecomposition | {_format_elapsed(allreduce_start)}", flush=True)
 
             # Eigendecomposition
+            eig_start = time.perf_counter()
             eigs, eigv = np.linalg.eigh(self.D_global)
 
             # Sort descending
@@ -112,7 +121,7 @@ class SVDDecomposition:
             # Tr matrix and reduced coordinates
             self.Tr_global = self.eigv[:, :self.r] @ np.diag(self.eigs[:self.r]**(-0.5))
             self.Qhat_global = np.diag(np.sqrt(self.eigs[:self.r])) @ self.eigv[:, :self.r].T
-            print(f"[SVD] Eigendecomposition complete. Selected r={self.r}", flush=True)
+            print(f"[SVD] Eigendecomposition complete. Selected r={self.r} | {_format_elapsed(eig_start)}", flush=True)
         else:
             self.eigs = None
             self.eigv = None
@@ -121,11 +130,12 @@ class SVDDecomposition:
             self.Qhat_global = None
 
         # Broadcast results to all ranks
+        broadcast_start = time.perf_counter()
         self.r = comm.bcast(self.r, root=0)
         self.Tr_global = comm.bcast(self.Tr_global, root=0)
         self.Qhat_global = comm.bcast(self.Qhat_global, root=0)
         if rank == 0:
-            print("[SVD] Broadcast complete", flush=True)
+            print(f"[SVD] Broadcast complete | {_format_elapsed(broadcast_start)}", flush=True)
 
         return self
 
@@ -207,4 +217,3 @@ class SVDDecomposition:
 
       #  np.save(f"{outdir}/{prefix}_eigv.npy", self.eigv)
       #  np.save(f"{outdir}/{prefix}_r.npy", np.array([self.r]))
-
