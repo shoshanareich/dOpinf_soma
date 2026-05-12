@@ -28,6 +28,7 @@ import numpy as np
 import xarray as xr
 
 import cmocean.cm as cmo
+from config_utils import ensure_slash, resolve_forcing_config
 
 
 VAR_META = {
@@ -78,10 +79,6 @@ class SurfaceFields:
 
 def split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def ensure_slash(path: str) -> str:
-    return path if path.endswith("/") else path + "/"
 
 
 def list_to_csv(values: list[str]) -> str:
@@ -136,8 +133,10 @@ def apply_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
         if getattr(args, attr) is None and config.get(key) is not None:
             setattr(args, attr, config[key])
 
-    snapshot_dirs = config.get("snapshot_dirs") or []
-    test_dir = config.get("test_dir")
+    forcing_config = resolve_forcing_config(config)
+    snapshot_dirs = forcing_config["snapshot_dirs"]
+    test_dirs = forcing_config["test_dirs"]
+    test_dir = test_dirs[0] if test_dirs else None
     if args.training_dirs is None and snapshot_dirs:
         args.training_dirs = list_to_csv(snapshot_dirs)
     if args.test_dir is None and test_dir:

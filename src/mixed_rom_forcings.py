@@ -35,6 +35,7 @@ import sys
 sys.path.append('/home/shoshi/MITgcm_obsfit/MITgcm/utils/python/MITgcmutils/')
 from MITgcmutils import rdmds
 
+from config_utils import resolve_forcing_config
 from utils import *
 from shiftscale import *
 from svd import SVDDecomposition
@@ -83,8 +84,18 @@ n_days = config['n_days']
 center_opt = config['center_opt']
 scale = config['scale']
 dir_extension = config.get('dir_extension', 'default_extension')
-snapshot_dirs = config.get('snapshot_dirs', [])
-test_dir = config.get('test_dir', '')
+forcing_config = resolve_forcing_config(config)
+train_taus = forcing_config['train_taus']
+test_taus = forcing_config['test_taus']
+snapshot_dirs = forcing_config['snapshot_dirs']
+test_dirs = forcing_config['test_dirs']
+
+if any(tau is None for tau in train_taus):
+    raise ValueError("Define 'train_taus' in config.json, or include tau values in each snapshot directory name")
+if any(tau is None for tau in test_taus):
+    raise ValueError("Define 'test_taus' in config.json, or include tau values in each test directory name")
+
+test_dir = test_dirs[0] if test_dirs else ''
 
 # check for target_ret_energy or r
 target_ret_energy = config.get('target_ret_energy')
@@ -94,10 +105,16 @@ if (target_ret_energy is None and r is None) or (target_ret_energy is not None a
     raise ValueError("Must define either 'target_ret_energy' OR 'r' in config.json")
 
 if not snapshot_dirs:
-    raise ValueError("Must define 'snapshot_dirs' in config.json with at least one snapshot directory")
+    raise ValueError("Must define 'snapshot_dirs' or train tau settings in config.json")
 
-if not test_dir:
-    raise ValueError("Must define 'test_dir' in config.json")
+if not test_dirs:
+    raise ValueError("Must define 'test_dir', 'test_dirs', or test tau settings in config.json")
+
+if len(train_taus) != len(snapshot_dirs):
+    raise ValueError("'train_taus' must have the same length as 'snapshot_dirs'")
+
+if len(test_taus) != len(test_dirs):
+    raise ValueError("'test_taus' must have the same length as test directories")
 
 n_days_per_year = int(360 / n_days)
 nt = n_days_per_year * n_year_train 
@@ -317,8 +334,14 @@ if rank ==0:
     sstar = F.compute_salinity_forcing() ## SSS relaxation
     Tmax, c_theta, b_theta = F.compute_temp_forcing() ## SST relaxation
     g = F.compute_wind_forcing() ## time-independent spatially-varying component of wind forcing
-    tau4 = F.compute_wind_seasonal_amplitude() ## wind stress inputs
-    tau1 = F.compute_wind_seasonal_amplitude(max_val=0.1) ## wind stress inputs
+    tau_train = [
+        F.compute_wind_seasonal_amplitude(max_val=float(tau))
+        for tau in train_taus
+    ] ## wind stress inputs for each training scenario
+    tau_test = [
+        F.compute_wind_seasonal_amplitude(max_val=float(tau))
+        for tau in test_taus
+    ] ## wind stress inputs for each test scenario
 
     forcings = {
         's_star': sstar.ravel(), #* alphaS,
@@ -339,18 +362,18 @@ if rank ==0:
 
     ## ROM inputs
 
-    inputs_list = [build_rom_inputs(Tmax, tau1, n_year_train, n_days),
-                    build_rom_inputs(Tmax, tau4, n_year_train, n_days)]
-    
-    inputs_stacked = np.hstack([build_rom_inputs(Tmax, tau1, n_year_train, n_days),
-                                build_rom_inputs(Tmax, tau4, n_year_train, n_days)])
+    inputs_list = [
+        build_rom_inputs(Tmax, tau, n_year_train, n_days)
+        for tau in tau_train
+    ]
+                                
 
     ## slice concatenated Qhat into a list 
     num_scenarios = svd.Qhat_global.shape[1] // nt
     states_list = [svd.Qhat_global[:, i*nt : (i+1)*nt] for i in range(num_scenarios)]
 
 
-    print('learn ROM')
+    print('learn ROM', flush=True)
     rom_learning_start = time.perf_counter()
 
     # learn ROM!
@@ -362,8 +385,8 @@ if rank ==0:
   #  weights_H = np.logspace(-2, 10, n_train_H)
   #  weights_A = np.logspace(-8, 3, n_train_A)
 
-    cond = np.linalg.cond(svd.Qhat_global)
-    print(f'condition number: {cond}')
+    # cond = np.linalg.cond(svd.Qhat_global)
+    # print(f'condition number: {cond}')
 
     ## regularization parameter search 
     sweep = TikhonovSweep(
@@ -398,11 +421,13 @@ if rank ==0:
         dir_name = clean_path.split('/')[-1]
         scenario_labels.append(dir_name)
     
-    test_label = test_dir.rstrip('/').split('/')[-1]
+    test_labels = [path.rstrip('/').split('/')[-1] for path in test_dirs]
 
     # predict for all training scenarios
-    inputs_list_predict = [build_rom_inputs(Tmax, tau1, n_year_train + n_year_predict, n_days),
-                    build_rom_inputs(Tmax, tau4, n_year_train + n_year_predict, n_days)]
+    inputs_list_predict = [
+        build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
+        for tau in tau_train
+    ]
     
     streamfunction_jobs = []
     for i, (Q_, u_in) in enumerate(zip(states_list, inputs_list_predict)):
@@ -420,17 +445,16 @@ if rank ==0:
         streamfunction_jobs.append((q_rom_stem, Q_rec))
         print(f"Reconstructed and saved training scenario {i} ({scenario_name})")
 
-    # predict for unseen case
-    tau = F.compute_wind_seasonal_amplitude(max_val=0.3)
-    inputs_new = build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
+    # predict for unseen cases
+    for test_label, tau in zip(test_labels, tau_test):
+        inputs_new = build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
 
-
-    ## using projected q0 
-    # OR can use Q0 from training scenario, looking at how well we can drift ##
-    Q_ROM_ = model.predict(q0_, niters = int((n_year_train + n_year_predict)* 360 / n_days), inputs=inputs_new)
-    q_rom_stem = f'Q_ROM_test_{test_label}'
-    np.save(results_dir + f'{q_rom_stem}.npy', Q_ROM_)
-    streamfunction_jobs.append((q_rom_stem, Q_ROM_))
+        ## using projected q0 
+        # OR can use Q0 from training scenario, looking at how well we can drift ##
+        Q_ROM_ = model.predict(q0_, niters = int((n_year_train + n_year_predict)* 360 / n_days), inputs=inputs_new)
+        q_rom_stem = f'Q_ROM_test_{test_label}'
+        np.save(results_dir + f'{q_rom_stem}.npy', Q_ROM_)
+        streamfunction_jobs.append((q_rom_stem, Q_ROM_))
 
 
 comm.Barrier()

@@ -144,7 +144,7 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
                     if global_center.ndim > 1 and global_center.shape[1] == 1:
                         global_center = global_center[:, 0]
                 
-                print(f"Successfully loaded center_ref from {save_file}")
+                print(f"Successfully loaded center_ref from {save_file}", flush=True)
             
             # Broadcast global center to all ranks
             if comm:
