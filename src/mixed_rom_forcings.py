@@ -100,6 +100,10 @@ test_dir = test_dirs[0] if test_dirs else ''
 # check for target_ret_energy or r
 target_ret_energy = config.get('target_ret_energy')
 r = config.get('r')
+svd_kwargs = {
+    'gram_chunk_rows': config.get('svd_gram_chunk_rows'),
+    'dense_block_gb': config.get('svd_dense_block_gb'),
+}
 
 if (target_ret_energy is None and r is None) or (target_ret_energy is not None and r is not None):
     raise ValueError("Must define either 'target_ret_energy' OR 'r' in config.json")
@@ -250,9 +254,9 @@ if rank ==0:
 ### SVD
 
 if target_ret_energy is not None:
-    svd = SVDDecomposition(Q_rank, comm, target_ret_energy=target_ret_energy)
+    svd = SVDDecomposition(Q_rank, comm, target_ret_energy=target_ret_energy, **svd_kwargs)
 elif r is not None:
-    svd = SVDDecomposition(Q_rank, comm, r=r)
+    svd = SVDDecomposition(Q_rank, comm, r=r, **svd_kwargs)
 else:
     raise ValueError("Neither 'r' nor 'target_ret_energy' was defined.")
 svd.compute()

@@ -34,7 +34,7 @@ def scalefactor(Q_rank, scale_type='maxabs', comm=None):
         return 1.0 # Avoid division by zero
 
     if scale_type == 'var':
-        # Local variance per spatial point (No MPI needed)
+        # Local variance per spatial point 
         # Result: (n_spatial_points_on_rank,)
         alpha = da.std(Q_rank, axis=1).compute()
         alpha = np.where(alpha == 0, 1.0, alpha)

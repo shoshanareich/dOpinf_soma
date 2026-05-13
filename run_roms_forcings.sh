@@ -2,8 +2,8 @@
 #SBATCH --job-name=rom_forcings
 #SBATCH --output=logs/forcings.out
 #SBATCH --error=logs/forcings.err
-#SBATCH --nodes=9
-#SBATCH --ntasks=248
+#SBATCH --nodes=4
+#SBATCH --ntasks=62
 #SBATCH --time=12:00:00
 ###SBATCH --array=0-9%3       # Run 3 jobs at a time
 
@@ -12,7 +12,7 @@ source activate opinf_mixed
 
 root_dir=/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/
 #CONFIG_FILE="$root_dir/configs/config_${SLURM_ARRAY_TASK_ID}.json"
-CONFIG_FILE="$root_dir/configs_forcings/config_forcings_3.json"
+CONFIG_FILE="$root_dir/configs_forcings/config_forcings_0.json"
 scratch_root_dir=/scratch/shoshi/soma4/dOpInf_results/
 
 
@@ -53,7 +53,7 @@ export ROM_POINTER_DIR="$root_dir"
 # Launch the job
 MPI_START_SECONDS=$SECONDS
 echo "[timing] Starting mixed_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S')"
-mpiexec -np 248 python3 $root_dir/src/mixed_rom_forcings.py
+mpiexec -np 62 python3 $root_dir/src/mixed_rom_forcings.py
 MPI_STATUS=$?
 MPI_ELAPSED=$((SECONDS - MPI_START_SECONDS))
 echo "[timing] Finished mixed_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S') after $((MPI_ELAPSED / 60)) min $((MPI_ELAPSED % 60)) sec"

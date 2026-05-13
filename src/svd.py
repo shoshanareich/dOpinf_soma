@@ -1,6 +1,7 @@
 from mpi4py import MPI
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import time
 
 
@@ -9,7 +10,15 @@ class SVDDecomposition:
     Parallel SVD computation using the global Gram matrix
     """
 
-    def __init__(self, Q_rank, comm=MPI.COMM_WORLD, target_ret_energy=None, r=None):
+    def __init__(
+        self,
+        Q_rank,
+        comm=MPI.COMM_WORLD,
+        target_ret_energy=None,
+        r=None,
+        gram_chunk_rows=None,
+        dense_block_gb=None,
+    ):
         """
         Parameters
         ----------
@@ -23,6 +32,12 @@ class SVDDecomposition:
         self.comm = comm
         self.target_ret_energy = target_ret_energy
         self.r = r
+        self.gram_chunk_rows = int(
+            os.environ.get("SVD_GRAM_CHUNK_ROWS", gram_chunk_rows or 8192)
+        )
+        self.dense_block_gb = float(
+            os.environ.get("SVD_DENSE_BLOCK_GB", dense_block_gb if dense_block_gb is not None else 1.0)
+        )
 
         # Outputs
         self.D_global = None
@@ -50,17 +65,33 @@ class SVDDecomposition:
         def _block_gram(block):
             """
             Compute the local Gram contribution for one row block.
-            If dask, break into 4,096 × n_t slices for memory efficiency
+            If dask, compute modest blocks eagerly to NumPy for BLAS speed.
+            Larger blocks are streamed through row chunks for memory efficiency.
             """
             if hasattr(block, "chunks"):
                 try:
-                    block = block.rechunk({0: min(4096, int(block.shape[0]))})
+                    block_nbytes = int(np.prod(block.shape)) * np.dtype(block.dtype).itemsize
+                except Exception:
+                    block_nbytes = None
+
+                dense_block_bytes = self.dense_block_gb * 1024**3
+                if (
+                    self.dense_block_gb > 0
+                    and block_nbytes is not None
+                    and block_nbytes <= dense_block_bytes
+                ):
+                    block_np = np.asarray(block.compute())
+                    return block_np.T @ block_np
+
+                try:
+                    chunk_rows = min(self.gram_chunk_rows, int(block.shape[0]))
+                    block = block.rechunk({0: chunk_rows})
                 except Exception:
                     pass
 
                 D_block = None
                 for i in range(block.numblocks[0]):
-                    row_chunk = block.blocks[i, :].compute()
+                    row_chunk = np.asarray(block.blocks[i, :].compute())
                     gram = row_chunk.T @ row_chunk
                     if D_block is None:
                         D_block = gram

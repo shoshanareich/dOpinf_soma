@@ -591,3 +591,4 @@ def get_new_IC(snapshot_dir, centers, alphas, n_year_train, n_days, rank, size, 
     
     return IC_rank
 
+

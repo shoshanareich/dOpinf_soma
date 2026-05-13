@@ -132,7 +132,7 @@ class TikhonovSweep:
         'sweep'
         for i, reg_H in enumerate(self.weights_H):
             if verbose:
-                print(f"iteration {i+1} / {len(self.weights_H)}")
+                print(f"iteration {i+1} / {len(self.weights_H)}", flush=True)
 
             for j, reg_A in enumerate(self.weights_A):
                 converged, err = fit_and_score_model(
