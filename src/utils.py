@@ -6,6 +6,7 @@ import zarr
 import os
 import shutil
 import gc
+import time
 import sys
 sys.path.append('/home/shoshi/MITgcm_obsfit/MITgcm/utils/python/MITgcmutils/')
 from MITgcmutils import rdmds
@@ -214,16 +215,26 @@ def extract_surface(rank_data, rank, size, nx=248, ny=248, nz=31):
 
 
 def gather_and_save_surface(local_surf_dask, name, preproc_dir, nx, ny, rank, comm):
+    def log_elapsed(step, start_time):
+        if rank == 0:
+            elapsed = time.perf_counter() - start_time
+            print(f"[surface] {name} {step} | elapsed {elapsed / 60:.2f} min ({elapsed:.1f} s)", flush=True)
+
     if rank == 0:
         print(f"Starting {name} surface compute/gather/save", flush=True)
 
     # Compute LOCALLY first
+    compute_start = time.perf_counter()
     local_surf_np = local_surf_dask.compute() 
+    log_elapsed("compute complete", compute_start)
     
     # gather the NumPy chunks to Rank 0
+    gather_start = time.perf_counter()
     all_chunks = comm.gather(local_surf_np, root=0)
+    log_elapsed("gather complete", gather_start)
 
     if rank == 0:
+        reshape_start = time.perf_counter()
         # Reshape each chunk to (ny, nx_local, ntime) 
         ntime = all_chunks[0].shape[1]
         size = comm.Get_size()
@@ -241,10 +252,13 @@ def gather_and_save_surface(local_surf_dask, name, preproc_dir, nx, ny, rank, co
 
         # Flatten to (ny*nx, ntime) to match your OpInf expectations
         global_surf_2d = global_surf_3d.reshape((-1, ntime))
+        log_elapsed("reshape/concat complete", reshape_start)
 
         #  Save as .npy file
+        save_start = time.perf_counter()
         save_path = f"{preproc_dir}{name}_transformed_surface.npy"
         np.save(save_path, global_surf_2d)
+        log_elapsed("save complete", save_start)
         print(f"Successfully saved {name} surface. Final shape: {global_surf_2d.shape}", flush=True)
 
 
@@ -590,5 +604,4 @@ def get_new_IC(snapshot_dir, centers, alphas, n_year_train, n_days, rank, size, 
     IC_rank = np.vstack([U0_rank, V0_rank, Eta0_rank, T0_rank, S0_rank])
     
     return IC_rank
-
 

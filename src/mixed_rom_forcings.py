@@ -149,13 +149,16 @@ Eta_rank_list = []
 T_rank_list = []
 S_rank_list = []
 
+i_chunk = max(1, nx // size)
+time_chunk = min(360, 360 * n_year_train)
+
 for snapshot_dir in snapshot_dirs:
     ds = xr.open_dataset(
         snapshot_dir + 'states_20yrs.nc',
         engine="h5netcdf",
         decode_timedelta=False,
         decode_times=False,
-        chunks={"time": min(360, 360 * n_year_train), "i": 8, "i_g": 8},
+        chunks={"time": time_chunk, "i": i_chunk, "i_g": i_chunk},
     )  # , backend_kwargs={'driver': 'mpio'})
 
     U_rank, V_rank, Eta_rank, T_rank, S_rank = reshape_data(nx, n_days, n_year_train, ds, rank, size)
@@ -204,11 +207,11 @@ def gather_global_alpha(local_alpha, actual_nz, nx, ny, comm):
 
 
 # center and scale data. immediately overwrite/delete the raw version
-U_rank_transform, centerU, alphaU = shiftscale(U_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-V_rank, centerV, alphaV = shiftscale(V_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-T_rank, centerT, alphaT = shiftscale(T_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-S_rank, centerS, alphaS = shiftscale(S_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+U_rank_transform, centerU, alphaU = shiftscale(U_rank, n_year_train, comm, center_type=center_opt, scale_type=scale)#, save_file=preproc_dir + f'centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+V_rank, centerV, alphaV = shiftscale(V_rank, n_year_train, comm, center_type=center_opt, scale_type=scale)#, save_file=preproc_dir + f'centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+T_rank, centerT, alphaT = shiftscale(T_rank, n_year_train, comm, center_type=center_opt, scale_type=scale)#, save_file=preproc_dir + f'centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+S_rank, centerS, alphaS = shiftscale(S_rank, n_year_train, comm, center_type=center_opt, scale_type=scale)#, save_file=preproc_dir + f'centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, n_year_train, comm, center_type=center_opt, scale_type=scale)#, save_file=preproc_dir + f'centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
 
 ## save scaling
 alphas = {
@@ -249,7 +252,7 @@ svd_start = time.perf_counter()
 if rank ==0:
     log_timing("Starting SVD")
     sval_dir = root_dir + '/svals/' + dir_extension + '/'
-    os.makedirs(sval_dir, exist_ok=True)
+    os.makedirs(sval_dir, exist_ok=True) 
 
 ### SVD
 

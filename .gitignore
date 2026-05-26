@@ -10,6 +10,8 @@
 
 # Allow all shell scripts
 !*.sh
+run_roms_forcings124.sh
+run_roms_forcings62.sh
 
 # Optional: If you want to keep specific files inside the allowed folders
 !configs/**

@@ -2,19 +2,17 @@
 #SBATCH --job-name=rom_forcings
 #SBATCH --output=logs/forcings.out
 #SBATCH --error=logs/forcings.err
-#SBATCH --nodes=2
-#SBATCH --ntasks=31
+#SBATCH --nodes=4
+#SBATCH --ntasks=62
 #SBATCH --time=12:00:00
 ###SBATCH --array=0-9%3       # Run 3 jobs at a time
 
-
-nprocs=31
 
 source activate opinf_mixed
 
 root_dir=/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/
 #CONFIG_FILE="$root_dir/configs/config_${SLURM_ARRAY_TASK_ID}.json"
-CONFIG_FILE="$root_dir/configs_forcings/config_forcings_1.json"
+CONFIG_FILE="$root_dir/configs_forcings/config_forcings_0.json"
 scratch_root_dir=/scratch/shoshi/soma4/dOpInf_results/
 
 
@@ -55,7 +53,7 @@ export ROM_POINTER_DIR="$root_dir"
 # Launch the job
 MPI_START_SECONDS=$SECONDS
 echo "[timing] Starting mixed_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S')"
-mpiexec -np ${nprocs} python3 $root_dir/src/mixed_rom_forcings.py
+mpiexec -np 62 python3 $root_dir/src/mixed_rom_forcings.py
 MPI_STATUS=$?
 MPI_ELAPSED=$((SECONDS - MPI_START_SECONDS))
 echo "[timing] Finished mixed_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S') after $((MPI_ELAPSED / 60)) min $((MPI_ELAPSED % 60)) sec"
@@ -84,20 +82,20 @@ fi
 
 cp "$CONFIG_FILE" "$RESULTS_DIR/config.json"
 
-EVAL_START_SECONDS=$SECONDS
-echo "[timing] Starting eval_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S')"
-python3 "$root_dir/src/eval_rom_forcings.py" \
-    --config "$CONFIG_FILE" \
-    --root-dir "$scratch_root_dir" \
-    --data-dir "$RESULTS_DIR" \
-    --outdir "$RESULTS_DIR/analysis"
-EVAL_STATUS=$?
-EVAL_ELAPSED=$((SECONDS - EVAL_START_SECONDS))
-echo "[timing] Finished eval_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S') after $((EVAL_ELAPSED / 60)) min $((EVAL_ELAPSED % 60)) sec"
-if [ "$EVAL_STATUS" -ne 0 ]; then
-    echo "Error: eval_rom_forcings.py failed with exit code $EVAL_STATUS"
-    exit "$EVAL_STATUS"
-fi
+#EVAL_START_SECONDS=$SECONDS
+#echo "[timing] Starting eval_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S')"
+#python3 "$root_dir/src/eval_rom_forcings.py" \
+#    --config "$CONFIG_FILE" \
+#    --root-dir "$scratch_root_dir" \
+#    --data-dir "$RESULTS_DIR" \
+#    --outdir "$RESULTS_DIR/analysis"
+#EVAL_STATUS=$?
+#EVAL_ELAPSED=$((SECONDS - EVAL_START_SECONDS))
+#echo "[timing] Finished eval_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S') after $((EVAL_ELAPSED / 60)) min $((EVAL_ELAPSED % 60)) sec"
+#if [ "$EVAL_STATUS" -ne 0 ]; then
+#    echo "Error: eval_rom_forcings.py failed with exit code $EVAL_STATUS"
+#    exit "$EVAL_STATUS"
+#fi
 
 # Record finish time
 JOB_ELAPSED=$((SECONDS - JOB_START_SECONDS))

@@ -68,6 +68,28 @@ def scalefactor(Q_rank, scale_type='maxabs', comm=None):
         raise ValueError(f"Unknown scale_type {scale_type}")
 
 
+def alpha2_from_row_extrema(q_min, q_max, center_ref, alpha, comm=None):
+    """
+    Compute max(abs((Q - center) / alpha)) from per-row extrema.
+    Valid when center_ref and alpha are constant over time for each row.
+    """
+    alpha_vec = np.asarray(alpha).reshape(-1)
+    if np.ndim(center_ref) == 0:
+        center_vec = float(center_ref)
+    else:
+        center_arr = np.asarray(center_ref).reshape(-1)
+        center_vec = center_arr[0] if center_arr.size == 1 else center_arr
+
+    local_vals = np.maximum(
+        np.abs(np.asarray(q_min) - center_vec),
+        np.abs(np.asarray(q_max) - center_vec),
+    ) / alpha_vec
+    local_val = float(np.max(local_vals)) if local_vals.size else 0.0
+    if comm:
+        return comm.allreduce(local_val, op=MPI.MAX)
+    return local_val
+
+
 
 def compute_climatology(Q_rank, cycle_len, comm):
     """
@@ -103,6 +125,7 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
 
     n_space, n_time = Q_rank.shape
     rank = comm.Get_rank() if comm else 0
+    center_is_time_constant = center_type in ('mean', 'IC', 'global_mean', '')
 
     def log_elapsed(message, start_time):
         if rank == 0:
@@ -110,6 +133,9 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
             print(f"[shiftscale] {message} | elapsed {elapsed / 60:.2f} min ({elapsed:.1f} s)", flush=True)
     
     center_ref = None
+    alpha = None
+    q_min = None
+    q_max = None
 
     # Keep time chunks reasonable before any reductions.
     if hasattr(Q_rank, 'chunks'):
@@ -174,7 +200,18 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
     if center_ref is None:
         center_start = time.perf_counter()
         if center_type == 'mean':
-            center_ref = da.mean(Q_rank, axis=1).compute()  # (space,)
+            if scale_type == 'var':
+                # For mean-centering, std(Q - mean(Q)) == std(Q). Computing both
+                # together lets Dask share the same source reads/chunk tasks.
+                center_ref, alpha, q_min, q_max = da.compute(
+                    da.mean(Q_rank, axis=1),
+                    da.std(Q_rank, axis=1),
+                    da.min(Q_rank, axis=1),
+                    da.max(Q_rank, axis=1),
+                )
+                alpha = np.where(alpha == 0, 1.0, alpha)
+            else:
+                center_ref = da.mean(Q_rank, axis=1).compute()  # (space,)
         
         elif center_type == 'global_mean': #single mean across space and time
             # Identify ocean points only
@@ -187,7 +224,16 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
             center_ref = np.array([val])
 
         elif center_type == 'IC':
-            center_ref = Q_rank[:, 0].compute()  # (space,)
+            if scale_type == 'var':
+                center_ref, alpha, q_min, q_max = da.compute(
+                    Q_rank[:, 0],
+                    da.std(Q_rank, axis=1),
+                    da.min(Q_rank, axis=1),
+                    da.max(Q_rank, axis=1),
+                )
+                alpha = np.where(alpha == 0, 1.0, alpha)
+            else:
+                center_ref = Q_rank[:, 0].compute()  # (space,)
 
         elif center_type == 'seasonal':
             center_ref = compute_climatology(Q_rank, 360, comm)  # (space,360)
@@ -198,6 +244,13 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
         else:
             print("No centering specified, not centering")
             center_ref = 0
+            if center_type == '' and scale_type == 'var':
+                alpha, q_min, q_max = da.compute(
+                    da.std(Q_rank, axis=1),
+                    da.min(Q_rank, axis=1),
+                    da.max(Q_rank, axis=1),
+                )
+                alpha = np.where(alpha == 0, 1.0, alpha)
         log_elapsed(f"Compute center complete ({center_type})", center_start)
 
         # Save reference (SAFE)
@@ -221,7 +274,16 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
     # ---------- SCALE BASED ON SHIFTED DATA ----------
     scale_start = time.perf_counter()
     if scale_type is not None:
-        alpha = scalefactor(Q_shifted, scale_type, comm)
+        if alpha is None:
+            if scale_type == 'var' and center_is_time_constant:
+                alpha, q_min, q_max = da.compute(
+                    da.std(Q_rank, axis=1),
+                    da.min(Q_rank, axis=1),
+                    da.max(Q_rank, axis=1),
+                )
+                alpha = np.where(alpha == 0, 1.0, alpha)
+            else:
+                alpha = scalefactor(Q_shifted, scale_type, comm)
         if np.ndim(alpha) == 1:
             alpha = np.where(alpha == 0, 1.0, alpha)
             alpha = alpha[:, np.newaxis]
@@ -231,7 +293,12 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
 
     # ---------- FINAL TRANSFORM ----------
     Q_rank = Q_shifted / alpha
-    alpha2 = scalefactor(Q_rank, 'maxabs', comm)
+    alpha2_start = time.perf_counter()
+    if scale_type == 'var' and center_is_time_constant and q_min is not None and q_max is not None:
+        alpha2 = alpha2_from_row_extrema(q_min, q_max, center_ref, alpha, comm)
+    else:
+        alpha2 = scalefactor(Q_rank, 'maxabs', comm)
+    log_elapsed("Alpha2 maxabs complete", alpha2_start)
     Q_rank = Q_rank / alpha2
 
     alpha_total = alpha * alpha2
