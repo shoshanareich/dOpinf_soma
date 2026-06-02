@@ -168,6 +168,25 @@ def load_center(preproc_dir: str, var: str, center_opt: str, n_days: int, n_year
     return xr.open_dataset(path, engine="netcdf4").center
 
 
+def center_training_snapshots(train: np.ndarray, center_opt: str) -> tuple[np.ndarray | float, np.ndarray]:
+    """Return the centering reference and centered training snapshots."""
+    if center_opt == "global_mean":
+        wet = np.any(train != 0, axis=1)
+        center = float(np.mean(train[wet, :])) if np.any(wet) else float(np.mean(train))
+        return center, train - center
+    if center_opt == "mean":
+        center = np.mean(train, axis=1)
+        return center, train - center[:, None]
+    if center_opt == "IC":
+        center = train[:, 0]
+        return center, train - center[:, None]
+    if center_opt == "":
+        return 0.0, train
+    raise NotImplementedError(
+        f"Missing center file fallback is implemented for mean, IC, global_mean, and no-centering only; got {center_opt!r}."
+    )
+
+
 def load_training_snapshots_at_k(
     snapshot_dirs: list[str],
     var: str,
@@ -306,17 +325,21 @@ def transform_and_project_k_forcings(
         lifted_basis, center_for_add = projection_cache[cache_key]
     else:
         train = load_training_snapshots_at_k(snapshot_dirs, var, n_year_train, n_days, k)
-        center_da = load_center(preproc_dir, var, center_opt, n_days, n_year_train)
-        if center_opt == "global_mean":
-            center = np.asarray(center_da.values).reshape(-1)
-            center_for_add = center.item() if center.size == 1 else center
-            centered = train - center[:, None] if center.size > 1 else train - center.item()
-        else:
-            start = 0 if var == "Eta" else k * nx * ny
-            stop = nx * ny if var == "Eta" else (k + 1) * nx * ny
-            center = np.asarray(center_da[start:stop].values)
-            center_for_add = center
-            centered = train - center[:, None]
+        try:
+            center_da = load_center(preproc_dir, var, center_opt, n_days, n_year_train)
+            if center_opt == "global_mean":
+                center = np.asarray(center_da.values).reshape(-1)
+                center_for_add = center.item() if center.size == 1 else center
+                centered = train - center[:, None] if center.size > 1 else train - center.item()
+            else:
+                start = 0 if var == "Eta" else k * nx * ny
+                stop = nx * ny if var == "Eta" else (k + 1) * nx * ny
+                center = np.asarray(center_da[start:stop].values)
+                center_for_add = center
+                centered = train - center[:, None]
+        except FileNotFoundError as exc:
+            print(f"Warning: {exc}. Recomputing {center_opt} center for {var} level {k} from training snapshots.")
+            center_for_add, centered = center_training_snapshots(train, center_opt)
         lifted_basis = centered @ tr
         if projection_cache is not None:
             projection_cache[cache_key] = (lifted_basis, center_for_add)
@@ -394,6 +417,100 @@ def savefig(fig: plt.Figure, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=180, bbox_inches="tight")
     plt.close(fig)
+
+
+def safe_stem(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "scenario"
+
+
+def computed_fields_dir(outdir: Path) -> Path:
+    path = outdir / "computed_fields"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def as_dataarray_like(template: xr.DataArray, values: xr.DataArray | np.ndarray, name: str) -> xr.DataArray:
+    arr = values.values if isinstance(values, xr.DataArray) else np.asarray(values)
+    nt = min(template.sizes["time"], arr.shape[0])
+    template = template.isel(time=slice(0, nt))
+    return xr.DataArray(arr[:nt], coords=template.coords, dims=template.dims, name=name)
+
+
+def save_surface_fields(fields_by_scenario: dict[str, SurfaceFields], outdir: Path) -> None:
+    field_dir = computed_fields_dir(outdir)
+    for label, fields in fields_by_scenario.items():
+        ds = xr.Dataset(
+            {
+                "sst_fom": as_dataarray_like(fields.sst_fom, fields.sst_fom, "sst_fom"),
+                "sst_rom": as_dataarray_like(fields.sst_fom, fields.sst_rom, "sst_rom"),
+                "ssh_fom": as_dataarray_like(fields.ssh_fom, fields.ssh_fom, "ssh_fom"),
+                "ssh_rom": as_dataarray_like(fields.ssh_fom, fields.ssh_rom, "ssh_rom"),
+                "speed_fom": as_dataarray_like(fields.speed_fom, fields.speed_fom, "speed_fom"),
+                "speed_rom": as_dataarray_like(fields.speed_fom, fields.speed_rom, "speed_rom"),
+            },
+            attrs={"scenario": label, "description": "Surface fields used by eval_rom_forcings.py plots."},
+        )
+        ds.to_netcdf(field_dir / f"surface_fields_{safe_stem(label)}.nc", engine="h5netcdf")
+
+
+def save_surface_plot_data(
+    fields_by_scenario: dict[str, SurfaceFields],
+    n_days: int,
+    month_idx: int,
+    nx: int,
+    ny: int,
+    outdir: Path,
+) -> None:
+    field_dir = computed_fields_dir(outdir)
+    variables = [
+        ("ssh", "ssh_fom", "ssh_rom"),
+        ("sst", "sst_fom", "sst_rom"),
+        ("speed", "speed_fom", "speed_rom"),
+    ]
+    for label, fields in fields_by_scenario.items():
+        data_vars = {}
+        time_coord = None
+        for prefix, fom_attr, rom_attr in variables:
+            fom_da = as_dataarray_like(getattr(fields, fom_attr), getattr(fields, fom_attr), f"{prefix}_fom")
+            rom_da = as_dataarray_like(getattr(fields, fom_attr), getattr(fields, rom_attr), f"{prefix}_rom")
+            spatial_dims = [dim for dim in fom_da.dims if dim != "time"]
+            fom_st = as_space_time(fom_da)
+            rom_st = as_space_time(rom_da)
+            nt = min(fom_st.shape[1], rom_st.shape[1])
+            years = np.arange(nt) * n_days / 360.0
+            time_coord = fom_da.coords.get("time", xr.DataArray(np.arange(nt), dims="time")).values[:nt]
+            rmse = np.sqrt(np.nanmean((rom_st[:, :nt] - fom_st[:, :nt]) ** 2, axis=0))
+            rel_l2 = np.linalg.norm(np.nan_to_num(rom_st[:, :nt] - fom_st[:, :nt]), axis=0) / np.maximum(
+                np.linalg.norm(np.nan_to_num(fom_st[:, :nt]), axis=0), 1e-14
+            )
+            data_vars[f"{prefix}_rmse"] = (("time",), rmse)
+            data_vars[f"{prefix}_relative_l2"] = (("time",), rel_l2)
+            data_vars[f"{prefix}_fom_spatial_mean"] = fom_da.where(fom_da != 0).mean(dim=spatial_dims)
+            data_vars[f"{prefix}_rom_spatial_mean"] = rom_da.where(rom_da != 0).mean(dim=spatial_dims)
+            data_vars[f"{prefix}_fom_variance"] = fom_da.var(dim="time", skipna=True)
+            data_vars[f"{prefix}_rom_variance"] = rom_da.var(dim="time", skipna=True)
+            data_vars[f"{prefix}_variance_error"] = data_vars[f"{prefix}_rom_variance"] - data_vars[f"{prefix}_fom_variance"]
+
+        snapshots_per_month = int(30 / n_days)
+        if snapshots_per_month >= 1:
+            fom = np.asarray(fields.ssh_fom)
+            rom = np.asarray(fields.ssh_rom)
+            nmonths = min(fom.shape[0], rom.shape[0]) // snapshots_per_month
+            if nmonths > 0:
+                idx = min(month_idx, nmonths - 1)
+                fom_m = fom[: nmonths * snapshots_per_month].reshape(nmonths, snapshots_per_month, ny, nx).mean(axis=1)[idx]
+                rom_m = rom[: nmonths * snapshots_per_month].reshape(nmonths, snapshots_per_month, ny, nx).mean(axis=1)[idx]
+                ssh_template = fields.ssh_fom.isel(time=0, drop=True)
+                data_vars["ssh_monthly_mean_fom"] = xr.DataArray(fom_m, coords=ssh_template.coords, dims=ssh_template.dims)
+                data_vars["ssh_monthly_mean_rom"] = xr.DataArray(rom_m, coords=ssh_template.coords, dims=ssh_template.dims)
+                data_vars["ssh_monthly_mean_error"] = data_vars["ssh_monthly_mean_rom"] - data_vars["ssh_monthly_mean_fom"]
+
+        ds = xr.Dataset(
+            data_vars,
+            coords={"time": time_coord, "year": (("time",), years)},
+            attrs={"scenario": label, "description": "Derived surface arrays used by eval_rom_forcings.py plots."},
+        )
+        ds.to_netcdf(field_dir / f"surface_plot_data_{safe_stem(label)}.nc", engine="h5netcdf")
 
 
 def load_depth_values(grid_dir: str, nz: int) -> np.ndarray:
@@ -713,6 +830,20 @@ def plot_vertical_temperature_profiles(
             ax.grid(True, linestyle="--", alpha=0.5)
         section_data.append((scenario.label, t_fom_3d, t_rom_da, depth_dim, horizontal_dim))
 
+    field_dir = computed_fields_dir(outdir)
+    for label, t_fom, t_rom, _, _ in section_data:
+        xr.Dataset(
+            {
+                "temperature_fom": t_fom.rename("temperature_fom"),
+                "temperature_rom": t_rom.rename("temperature_rom"),
+            },
+            attrs={
+                "scenario": label,
+                "vertical_i": args.vertical_i,
+                "description": "Longitude-section temperature fields used for vertical profile and section plots.",
+            },
+        ).to_netcdf(field_dir / f"temperature_vertical_{safe_stem(label)}.nc", engine="h5netcdf")
+
     axes[0].set_ylabel("Depth (m)", fontsize=12, fontweight="bold")
     axes[-1].legend(fontsize=8)
     fig.suptitle("Ocean Temperature Profile", fontsize=16)
@@ -773,14 +904,18 @@ def transform_and_project_lon_forcings(
             blocks.append(block)
             ds.close()
         train = np.hstack(blocks)
-        center = load_center(preproc_dir, var, center_opt, n_days, n_year_train)
-        if center_opt == "global_mean":
-            center_i = np.asarray(center.values).reshape(-1)
-            centered = train - center_i[:, None] if center_i.size > 1 else train - center_i.item()
-        else:
-            center_i = np.asarray(center.values).reshape(nz, ny, nx)[:, :, i].ravel()
-            centered = train - center_i[:, None]
-        center_i = center_i.item() if center_i.size == 1 else center_i
+        try:
+            center = load_center(preproc_dir, var, center_opt, n_days, n_year_train)
+            if center_opt == "global_mean":
+                center_i = np.asarray(center.values).reshape(-1)
+                centered = train - center_i[:, None] if center_i.size > 1 else train - center_i.item()
+            else:
+                center_i = np.asarray(center.values).reshape(nz, ny, nx)[:, :, i].ravel()
+                centered = train - center_i[:, None]
+            center_i = center_i.item() if center_i.size == 1 else center_i
+        except FileNotFoundError as exc:
+            print(f"Warning: {exc}. Recomputing {center_opt} center for {var} section i={i} from training snapshots.")
+            center_i, centered = center_training_snapshots(train, center_opt)
         lifted_basis = centered @ tr
         if projection_cache is not None:
             projection_cache[cache_key] = (lifted_basis, center_i)
@@ -892,6 +1027,23 @@ def maybe_plot_psi(scenarios: list[Scenario], args: argparse.Namespace, outdir: 
         print("Skipping psi plots; no matching FOM/ROM psi files found.")
         return
 
+    field_dir = computed_fields_dir(outdir)
+    for label, fom, rom in plot_data:
+        xr.Dataset(
+            {
+                "psi_fom": fom.rename("psi_fom"),
+                "psi_rom": rom.rename("psi_rom"),
+            },
+            attrs={
+                "scenario": label,
+                "month_idx": args.month_idx,
+                "description": "Monthly barotropic streamfunction fields used for the psi plot.",
+            },
+        ).to_netcdf(
+            field_dir / f"psi_month{args.month_idx + 1:02d}_{safe_stem(label)}.nc",
+            engine="h5netcdf",
+        )
+
     n = len(plot_data)
     fig, axes = plt.subplots(2, n, figsize=(4.4 * n, 6), squeeze=False, sharey=True)
     field_levels = np.arange(-90, 95, 10)
@@ -990,6 +1142,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grid-dir", default="/scratch/shoshi/soma4/grid/")
     parser.add_argument("--month-idx", type=int, default=12, help="Zero-based monthly mean index to plot")
     parser.add_argument("--outdir", default=None)
+    parser.add_argument("--skip-field-save", action="store_true", help="Skip full surface_fields_*.nc dumps")
     parser.add_argument("--skip-vertical", action="store_true")
     parser.add_argument("--skip-psi", action="store_true")
     return parser.parse_args()
@@ -1048,7 +1201,7 @@ def main() -> None:
         for scenario in scenarios
     }
 
-    fields_by_scenario = {}
+    fields_by_scenario = {}  
     metric_rows = []
     projection_cache: dict[tuple[str, int, bool], tuple[np.ndarray, np.ndarray | float]] = {}
     for scenario in scenarios:
@@ -1069,6 +1222,9 @@ def main() -> None:
             metric_rows.append(row)
 
     save_metrics_csv(metric_rows, outdir / "surface_metrics.csv")
+    if not args.skip_field_save:
+        save_surface_fields(fields_by_scenario, outdir)
+    save_surface_plot_data(fields_by_scenario, args.n_days, args.month_idx, args.nx, args.ny, outdir)
     plot_rmse_summary(fields_by_scenario, args.n_days, outdir)
     plot_relative_error_summary(fields_by_scenario, args.n_days, outdir)
     plot_variability_maps(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.nx, args.ny, outdir)
