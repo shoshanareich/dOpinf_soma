@@ -1020,6 +1020,7 @@ def maybe_plot_psi(scenarios: list[Scenario], args: argparse.Namespace, outdir: 
         rom_monthly = psi_rom[rom_var].coarsen(time=snapshots_per_month, boundary="trim").mean()
         if np.nanmax(np.abs(fom_monthly.values)) > 1e4:
             fom_monthly = fom_monthly / 1e6
+        rom_monthly = rom_monthly.assign_coords(time=fom_monthly["time"])
         month_idx = min(args.month_idx, fom_monthly.sizes["time"] - 1, rom_monthly.sizes["time"] - 1)
         plot_data.append((scenario.label, fom_monthly.isel(time=month_idx), rom_monthly.isel(time=month_idx)))
 

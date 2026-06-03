@@ -103,7 +103,20 @@ def fit_and_score_model(reg_A, reg_H, *, Qs_, inputs, B, C, r, nt, t, weights=No
 
 
 class TikhonovSweep:
-    def __init__(self, *, Qs_, inputs, B, C, r, nt, t, weights_A, weights_H, norm_weights=None):
+    def __init__(
+        self,
+        *,
+        Qs_,
+        inputs,
+        B,
+        C,
+        r,
+        nt,
+        t,
+        weights_A,
+        weights_H,
+        norm_weights=None,
+    ):
         self.Qs_ = Qs_
         self.inputs = inputs
         self.B = B
@@ -157,6 +170,86 @@ class TikhonovSweep:
                     self.best_reg_H = reg_H
 
         return self.best_reg_A, self.best_reg_H, self.best_error
+
+
+    def run_mpi(self, comm, verbose=True):
+        """Distribute the regularization sweep over existing MPI ranks."""
+        rank = comm.Get_rank()
+        size = comm.Get_size()
+        tasks = [
+            (i, j, reg_A, reg_H)
+            for i, reg_H in enumerate(self.weights_H)
+            for j, reg_A in enumerate(self.weights_A)
+        ]
+        local_tasks = tasks[rank::size]
+
+        if rank == 0 and verbose:
+            print(
+                f"running Tikhonov grid search with {size} MPI ranks "
+                f"over {len(tasks)} candidates",
+                flush=True,
+            )
+
+        local_results = []
+        for i, j, reg_A, reg_H in local_tasks:
+            try:
+                converged, err = fit_and_score_model(
+                    reg_A,
+                    reg_H,
+                    Qs_=self.Qs_,
+                    inputs=self.inputs,
+                    B=self.B,
+                    C=self.C,
+                    r=self.r,
+                    nt=self.nt,
+                    t=self.t,
+                    weights=self.norm_weights,
+                )
+                failure = None
+            except Exception as exc:
+                converged = False
+                err = np.inf
+                failure = f"rank {rank}: reg_A={reg_A:.3e}, reg_H={reg_H:.3e} failed with {exc!r}"
+
+            local_results.append((i, j, converged, err, failure))
+
+        gathered_results = comm.gather(local_results, root=0)
+        best_tuple = None
+
+        if rank == 0:
+            failures = []
+            for rank_results in gathered_results:
+                for i, j, converged, err, failure in rank_results:
+                    self.converged[i, j] = converged
+                    self.errors[i, j] = err
+                    if failure is not None:
+                        failures.append(failure)
+
+            for failure in failures[:10]:
+                print(f"  -> {failure}", flush=True)
+            if len(failures) > 10:
+                print(f"  -> {len(failures) - 10} additional candidates failed", flush=True)
+
+            self._set_best_from_errors()
+            best_tuple = (self.best_reg_A, self.best_reg_H, self.best_error)
+
+        best_tuple = comm.bcast(best_tuple, root=0)
+        self.best_reg_A, self.best_reg_H, self.best_error = best_tuple
+        return best_tuple
+
+
+    def _set_best_from_errors(self):
+        self.best_reg_A = None
+        self.best_reg_H = None
+        self.best_error = np.inf
+
+        for i, reg_H in enumerate(self.weights_H):
+            for j, reg_A in enumerate(self.weights_A):
+                err = self.errors[i, j]
+                if self.converged[i, j] and err < self.best_error:
+                    self.best_error = err
+                    self.best_reg_A = reg_A
+                    self.best_reg_H = reg_H
 
 
     def save(self, path):

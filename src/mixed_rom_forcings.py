@@ -39,16 +39,15 @@ from config_utils import resolve_forcing_config
 from utils import *
 from shiftscale import *
 from svd import SVDDecomposition
+from learn_rom import TikhonovSweep
 import gc # garbage cleanup
 
 if MPI.COMM_WORLD.Get_rank() == 0:
-    import opinf
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
     from IPython.display import HTML
     from plotting import ROMPlotter
     from forcing import *
-    from learn_rom import TikhonovSweep
     log_timing("Library imports finished; setting vars", script_start)
 
 
@@ -313,7 +312,8 @@ results_dir = comm.bcast(results_dir, root=0)
 
 
 
-if rank ==0:
+rom_learning_payload = None
+if rank == 0:
 
   #  W_ = svd.Tr_global.T @ W_
    # np.save(root_dir + f'save_roms/varweights_{center_opt}_r{svd.r}_{n_days}days_{n_year_train}yrs.npy', W_)
@@ -379,10 +379,6 @@ if rank ==0:
     num_scenarios = svd.Qhat_global.shape[1] // nt
     states_list = [svd.Qhat_global[:, i*nt : (i+1)*nt] for i in range(num_scenarios)]
 
-
-    print('learn ROM', flush=True)
-    rom_learning_start = time.perf_counter()
-
     # learn ROM!
     n_train_H = 20
     n_train_A = 21
@@ -395,23 +391,46 @@ if rank ==0:
     # cond = np.linalg.cond(svd.Qhat_global)
     # print(f'condition number: {cond}')
 
-    ## regularization parameter search 
-    sweep = TikhonovSweep(
-        Qs_=states_list,
-        inputs=inputs_list,
-        B=B,
-        C=C,
-        r=svd.r,
-        nt=nt,
-        t=t,
-        weights_A=weights_A,
-        weights_H=weights_H#,
-      #  norm_weights=abs(W_)
-    )
+    print('learn ROM', flush=True)
+    rom_learning_start = time.perf_counter()
+    rom_learning_payload = {
+        "states_list": states_list,
+        "inputs_list": inputs_list,
+        "B": B,
+        "C": C,
+        "weights_A": weights_A,
+        "weights_H": weights_H,
+    }
+else:
+    rom_learning_start = None
+
+rom_learning_payload = comm.bcast(rom_learning_payload, root=0)
+states_list = rom_learning_payload["states_list"]
+inputs_list = rom_learning_payload["inputs_list"]
+B = rom_learning_payload["B"]
+C = rom_learning_payload["C"]
+weights_A = rom_learning_payload["weights_A"]
+weights_H = rom_learning_payload["weights_H"]
+
+## regularization parameter search 
+sweep = TikhonovSweep(
+    Qs_=states_list,
+    inputs=inputs_list,
+    B=B,
+    C=C,
+    r=svd.r,
+    nt=nt,
+    t=t,
+    weights_A=weights_A,
+    weights_H=weights_H,
+    # norm_weights=abs(W_),
+)
 
 
-    # grid search for best regularization parameters
-    reg_A, reg_H, best_err = sweep.run()
+# grid search for best regularization parameters
+reg_A, reg_H, best_err = sweep.run_mpi(comm)
+
+if rank == 0:
     print("Best:", best_err, reg_A, reg_H)
 
     # build final model with best reg params
