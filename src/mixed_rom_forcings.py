@@ -52,7 +52,7 @@ if MPI.COMM_WORLD.Get_rank() == 0:
 
 
 #root_dir = '/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/' 
-root_dir = '/scratch/shoshi/soma4/dOpInf_results/'
+root_dir = '/scratch2/shoshi/soma4/dOpInf_results/'
 
 ## spatial vars
 nx = 248

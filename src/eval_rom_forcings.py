@@ -1119,7 +1119,7 @@ def load_surface_fields(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=None, help="ROM training JSON file to use for evaluator defaults")
-    parser.add_argument("--root-dir", default="/scratch/shoshi/soma4/dOpInf_results/")
+    parser.add_argument("--root-dir", default="/scratch2/shoshi/soma4/dOpInf_results/")
     parser.add_argument("--data-dir", default=None, help="Directory containing Tr.npy and Q_ROM*.npy")
     parser.add_argument("--preproc-dir", default=None, help="Directory containing center*.nc files")
     parser.add_argument(

@@ -2,17 +2,17 @@
 #SBATCH --job-name=rom_forcings_sweep
 #SBATCH --output=logs/forcings_sweep_%A_%a.out
 #SBATCH --error=logs/forcings_sweep_%A_%a.err
-#SBATCH --nodes=4
+#SBATCH --nodes=3
 #SBATCH --ntasks=62
 #SBATCH --time=12:00:00
-#SBATCH --array=2-3%2
+#SBATCH --array=6-7%2
 ####SBATCH --array=3-6%4
 
 source activate opinf_mixed
 
 root_dir=/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/
 configs_dir="$root_dir/configs_forcings"
-scratch_root_dir=/scratch/shoshi/soma4/dOpInf_results/
+scratch_root_dir=/scratch2/shoshi/soma4/dOpInf_results/
 
 mkdir -p "$root_dir/logs"
 
