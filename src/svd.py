@@ -142,12 +142,16 @@ class SVDDecomposition:
 
             # Rank r that satisfies target energy or desired r
             if self.target_ret_energy is not None:
-                self.r = np.argmax(self.ret_energy >= self.target_ret_energy)
+                if not (0 < self.target_ret_energy <= 1):
+                    raise ValueError("target_ret_energy must be in the interval (0, 1]")
+                self.r = int(np.searchsorted(self.ret_energy, self.target_ret_energy, side="left") + 1)
             elif self.r is not None:
-                self.r = self.r
+                self.r = int(self.r)
             else:
                 self.r = len(self.eigs)
                 print('Warning: Neither r nor target_ret_energy specified. Using full rank.')
+            if self.r < 1 or self.r > len(self.eigs):
+                raise ValueError(f"r must be between 1 and {len(self.eigs)}, got {self.r}")
 
             # Tr matrix and reduced coordinates
             self.Tr_global = self.eigv[:, :self.r] @ np.diag(self.eigs[:self.r]**(-0.5))
@@ -178,6 +182,7 @@ class SVDDecomposition:
 
         eigs = self.eigs
         r = self.r
+        r_idx = r - 1
         target_ret_energy = self.target_ret_energy
         ret_energy = np.cumsum(eigs) / np.sum(eigs)
         no_svals_global = range(1, len(eigs) + 1)
@@ -211,15 +216,15 @@ class SVDDecomposition:
 
         # Right: retained energy
         ax = axes[1]
-        ax.plot(range(len(eigs)), self.ret_energy[:len(eigs)], linestyle='-', lw=0.75, color=color1)
+        ax.plot(no_svals_global, self.ret_energy[:len(eigs)], linestyle='-', lw=0.75, color=color1)
         ax.set_xlabel('reduced dimension')
         ax.set_ylabel('retained energy')	
-        ax.plot([r, r], [0, ret_energy[r]], linestyle='--', lw=0.5, color=charcoal)
-        ax.plot([0, r], [ret_energy[r], ret_energy[r]], linestyle='--', lw=0.5, color=charcoal)
-        ax.set_xlim(-1, 200)
+        ax.plot([r, r], [0, ret_energy[r_idx]], linestyle='--', lw=0.5, color=charcoal)
+        ax.plot([0, r], [ret_energy[r_idx], ret_energy[r_idx]], linestyle='--', lw=0.5, color=charcoal)
+        ax.set_xlim(0, 200)
         ax.set_ylim(0.1, 1.05)
-        ax.text(r+1, 0.15*ret_energy[r], f"r = {r}", color=charcoal, va='center')
-        ax.text(0.4*r, ret_energy[r]+0.02, f"{self.ret_energy[r]:.0%}", color=charcoal, ha='center')
+        ax.text(r+1, 0.15*ret_energy[r_idx], f"r = {r}", color=charcoal, va='center')
+        ax.text(0.4*r, ret_energy[r_idx]+0.02, f"{self.ret_energy[r_idx]:.0%}", color=charcoal, ha='center')
 
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)

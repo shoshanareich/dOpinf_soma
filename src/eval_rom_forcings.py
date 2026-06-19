@@ -165,10 +165,71 @@ def load_center(preproc_dir: str, var: str, center_opt: str, n_days: int, n_year
     path = Path(preproc_dir) / f"center{var}_{center_opt}_{n_days}days_{n_year_train}yrs.nc"
     if not path.exists():
         raise FileNotFoundError(f"Missing center file for {var}: {path}")
-    return xr.open_dataset(path, engine="netcdf4").center
+    ds = xr.open_dataset(path, engine="netcdf4")
+    if center_opt in ("seasonal", "monthly"):
+        saved_n_days = ds.attrs.get("n_days")
+        expected_cols = snapshots_per_year(n_days) if center_opt == "seasonal" else 12
+        center_shape = ds["center"].shape
+        valid = (
+            saved_n_days is not None
+            and int(saved_n_days) == int(n_days)
+            and len(center_shape) == 2
+            and center_shape[1] == expected_cols
+        )
+        if not valid:
+            ds.close()
+            raise FileNotFoundError(
+                f"Stale or incompatible {center_opt} center file for {var}: {path}. "
+                "Recomputing from training snapshots."
+            )
+    return ds.center
 
 
-def center_training_snapshots(train: np.ndarray, center_opt: str) -> tuple[np.ndarray | float, np.ndarray]:
+def snapshots_per_year(n_days: int) -> int:
+    if n_days <= 0 or 360 % n_days != 0:
+        raise ValueError(f"n_days must be a positive divisor of 360, got {n_days}")
+    return 360 // n_days
+
+
+def samples_per_month(n_days: int) -> int:
+    if 30 % n_days != 0:
+        raise ValueError(f"n_days must divide the 30-day model month, got {n_days}")
+    return 30 // n_days
+
+
+def center_time_indices(n_time: int, center_opt: str, n_days: int) -> np.ndarray:
+    t = np.arange(n_time)
+    if center_opt == "seasonal":
+        return t % snapshots_per_year(n_days)
+    if center_opt == "monthly":
+        return ((t * n_days) % 360) // 30
+    raise ValueError(f"{center_opt!r} is not a climatology center")
+
+
+def expand_center(center: np.ndarray | float, n_time: int, center_opt: str, n_days: int) -> np.ndarray | float:
+    center_arr = np.asarray(center)
+    if center_opt == "global_mean" or center_arr.ndim == 0 or center_arr.size == 1:
+        return center_arr.item()
+    if center_arr.ndim == 1:
+        return center_arr[:, None]
+    return center_arr[:, center_time_indices(n_time, center_opt, n_days)]
+
+
+def climatology_center(train: np.ndarray, center_opt: str, n_days: int) -> np.ndarray:
+    n_space, n_time = train.shape
+    spy = snapshots_per_year(n_days)
+    if n_time % spy != 0:
+        raise ValueError(f"training snapshots length {n_time} is not whole sampled years for n_days={n_days}")
+    train_years = train.reshape(n_space, n_time // spy, spy)
+    if center_opt == "seasonal":
+        return train_years.mean(axis=1)
+    if center_opt == "monthly":
+        spm = samples_per_month(n_days)
+        return train_years.reshape(n_space, n_time // spy, 12, spm).mean(axis=(1, 3))
+    raise ValueError(f"{center_opt!r} is not a climatology center")
+
+
+def center_training_snapshots(train: np.ndarray, center_opt: str, n_days: int) -> tuple[np.ndarray | float, np.ndarray]:
     """Return the centering reference and centered training snapshots."""
     if center_opt == "global_mean":
         wet = np.any(train != 0, axis=1)
@@ -182,9 +243,10 @@ def center_training_snapshots(train: np.ndarray, center_opt: str) -> tuple[np.nd
         return center, train - center[:, None]
     if center_opt == "":
         return 0.0, train
-    raise NotImplementedError(
-        f"Missing center file fallback is implemented for mean, IC, global_mean, and no-centering only; got {center_opt!r}."
-    )
+    if center_opt in ("seasonal", "monthly"):
+        center = climatology_center(train, center_opt, n_days)
+        return center, train - expand_center(center, train.shape[1], center_opt, n_days)
+    raise NotImplementedError(f"Unknown center option {center_opt!r}.")
 
 
 def load_training_snapshots_at_k(
@@ -257,7 +319,7 @@ def load_var_fom_k(
             var_fom = var_fom - center_da.values
         else:
             center = center_da[0:nx * ny] if var == "Eta" else center_da[k * nx * ny:(k + 1) * nx * ny]
-            var_fom = var_fom - center.values[:, None]
+            var_fom = var_fom - expand_center(center.values, var_fom.sizes["time"], center_opt, n_days)
 
     return var_fom, var_fom.unstack("space")
 
@@ -336,10 +398,10 @@ def transform_and_project_k_forcings(
                 stop = nx * ny if var == "Eta" else (k + 1) * nx * ny
                 center = np.asarray(center_da[start:stop].values)
                 center_for_add = center
-                centered = train - center[:, None]
+                centered = train - expand_center(center, train.shape[1], center_opt, n_days)
         except FileNotFoundError as exc:
             print(f"Warning: {exc}. Recomputing {center_opt} center for {var} level {k} from training snapshots.")
-            center_for_add, centered = center_training_snapshots(train, center_opt)
+            center_for_add, centered = center_training_snapshots(train, center_opt, n_days)
         lifted_basis = centered @ tr
         if projection_cache is not None:
             projection_cache[cache_key] = (lifted_basis, center_for_add)
@@ -349,7 +411,7 @@ def transform_and_project_k_forcings(
         if np.isscalar(center_for_add):
             rom = rom + center_for_add
         else:
-            rom = rom + center_for_add[:, None]
+            rom = rom + expand_center(center_for_add, rom.shape[1], center_opt, n_days)
     rom[np.abs(rom) > 100] = np.nan
     return rom, rom.T.reshape(rom.shape[1], ny, nx)
 
@@ -910,17 +972,22 @@ def transform_and_project_lon_forcings(
                 center_i = np.asarray(center.values).reshape(-1)
                 centered = train - center_i[:, None] if center_i.size > 1 else train - center_i.item()
             else:
-                center_i = np.asarray(center.values).reshape(nz, ny, nx)[:, :, i].ravel()
-                centered = train - center_i[:, None]
+                center_vals = np.asarray(center.values)
+                if center_vals.ndim == 1:
+                    center_i = center_vals.reshape(nz, ny, nx)[:, :, i].ravel()
+                else:
+                    center_i = center_vals.reshape(nz, ny, nx, center_vals.shape[1])[:, :, i, :].reshape(nz * ny, -1)
+                centered = train - expand_center(center_i, train.shape[1], center_opt, n_days)
             center_i = center_i.item() if center_i.size == 1 else center_i
         except FileNotFoundError as exc:
             print(f"Warning: {exc}. Recomputing {center_opt} center for {var} section i={i} from training snapshots.")
-            center_i, centered = center_training_snapshots(train, center_opt)
+            center_i, centered = center_training_snapshots(train, center_opt, n_days)
         lifted_basis = centered @ tr
         if projection_cache is not None:
             projection_cache[cache_key] = (lifted_basis, center_i)
 
-    rom = lifted_basis @ q_rom + (center_i if np.isscalar(center_i) else center_i[:, None])
+    rom = lifted_basis @ q_rom
+    rom = rom + (center_i if np.isscalar(center_i) else expand_center(center_i, rom.shape[1], center_opt, n_days))
     rom[np.abs(rom) > 100] = np.nan
     return rom, rom.T.reshape(rom.shape[1], nz, ny)
 

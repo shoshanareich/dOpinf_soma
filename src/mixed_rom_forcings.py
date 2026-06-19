@@ -1,6 +1,10 @@
+import os
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
+os.environ.setdefault("UCX_MEMTYPE_CACHE", "n")
+os.environ.setdefault("UCX_TLS", "rc,sm,self")
+
 from mpi4py import MPI
 import sys
-import os
 import time
 from datetime import datetime
 
@@ -19,9 +23,6 @@ def log_timing(message, start_time=None):
     else:
         elapsed = time.perf_counter() - start_time
         print(f"[timing] {stamp} | {message} | elapsed {elapsed / 60:.2f} min ({elapsed:.1f} s)", flush=True)
-
-os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-os.environ["UCX_MEMTYPE_CACHE"] = "n"
 
 log_timing(f"mixed_rom_forcings.py start; ranks initialized: {size}")
 log_timing("Starting library imports")
@@ -206,11 +207,11 @@ def gather_global_alpha(local_alpha, actual_nz, nx, ny, comm):
 
 
 # center and scale data. immediately overwrite/delete the raw version
-U_rank_transform, centerU, alphaU = shiftscale(U_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-V_rank, centerV, alphaV = shiftscale(V_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-T_rank, centerT, alphaT = shiftscale(T_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-S_rank, centerS, alphaS = shiftscale(S_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
-Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, n_year_train, comm, center_type=center_opt, scale_type=scale, save_file=preproc_dir + f'centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+U_rank_transform, centerU, alphaU = shiftscale(U_rank, n_year_train, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=preproc_dir + f'centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+V_rank, centerV, alphaV = shiftscale(V_rank, n_year_train, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=preproc_dir + f'centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+T_rank, centerT, alphaT = shiftscale(T_rank, n_year_train, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=preproc_dir + f'centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+S_rank, centerS, alphaS = shiftscale(S_rank, n_year_train, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=preproc_dir + f'centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
+Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, n_year_train, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=preproc_dir + f'centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc' )
 
 ## save scaling
 alphas = {
@@ -319,7 +320,7 @@ if rank == 0:
    # np.save(root_dir + f'save_roms/varweights_{center_opt}_r{svd.r}_{n_days}days_{n_year_train}yrs.npy', W_)
 
     print(f'reduced dimension r = {svd.r}')
-    print(f'retained energy = {svd.ret_energy[svd.r]}')
+    print(f'retained energy = {svd.ret_energy[svd.r - 1]}')
   #  svd.save(root_dir , prefix=f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}') ## saves Tr and Qhat
     svd.save(results_dir) ## saves Tr and Qhat
 

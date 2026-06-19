@@ -126,11 +126,11 @@ if rank == 0:
     print("Training snapshots loaded. Starting shiftscale... ", flush=True)
 
 # center and scale data. immediately overwrite/delete the raw version
-U_rank_transform, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt, scale_type=scale, save_file=root_dir + f'preproc/centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
-V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt, scale_type=scale, save_file=root_dir + f'preproc/centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
-T_rank, centerT, alphaT = shiftscale(T_rank, comm, center_type=center_opt, scale_type=scale, save_file=root_dir + f'preproc/centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
-S_rank, centerS, alphaS = shiftscale(S_rank, comm, center_type=center_opt, scale_type=scale, save_file=root_dir + f'preproc/centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
-Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_opt, scale_type=scale, save_file=root_dir + f'preproc/centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
+U_rank_transform, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=root_dir + f'preproc/centerU_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
+V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=root_dir + f'preproc/centerV_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
+T_rank, centerT, alphaT = shiftscale(T_rank, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=root_dir + f'preproc/centerT_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
+S_rank, centerS, alphaS = shiftscale(S_rank, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=root_dir + f'preproc/centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
+Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_opt, n_days=n_days, scale_type=scale, save_file=root_dir + f'preproc/centerEta_{center_opt}_{n_days}days_{n_year_train}yrs.nc')
 
 
 
@@ -228,7 +228,7 @@ if rank ==0:
    # np.save(root_dir + f'save_roms/varweights_{center_opt}_r{svd.r}_{n_days}days_{n_year_train}yrs.npy', W_)
 
     print(f'reduced dimension r = {svd.r}')
-    print(f'retained energy = {svd.ret_energy[svd.r]}')
+    print(f'retained energy = {svd.ret_energy[svd.r - 1]}')
   #  svd.save(root_dir , prefix=f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}') ## saves Tr and Qhat
     svd.save(results_dir) ## saves Tr and Qhat
 
@@ -274,7 +274,7 @@ if rank ==0:
         'S': xr.open_dataset(root_dir + f'preproc/centerS_{center_opt}_{n_days}days_{n_year_train}yrs.nc').center.values
     }
     alphas  = {'T': alphaT,  'S': alphaS,  'U': alphaU}
-    B, C = project_surface_forcings(ds_surface, svd.Tr_global,centers,alphas,forcings,nx, ny, nz, [center_opt, center_opt], n_year_train)
+    B, C = project_surface_forcings(ds_surface, svd.Tr_global,centers,alphas,forcings,nx, ny, nz, [center_opt, center_opt], n_year_train, n_days=n_days)
 
     # np.save(root_dir + f'for_nicole/projected_input_operator_r{svd.r}_{center_opt}_{n_year_train}trainyrs.npy', B)
     # np.save(root_dir + f'for_nicole/projected_constant_operator_r{svd.r}_{center_opt}_{n_year_train}trainyrs.npy', C)

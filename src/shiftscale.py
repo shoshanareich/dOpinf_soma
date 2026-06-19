@@ -91,33 +91,85 @@ def alpha2_from_row_extrema(q_min, q_max, center_ref, alpha, comm=None):
 
 
 
-def compute_climatology(Q_rank, cycle_len, comm):
+def _compute(value):
+    return value.compute() if hasattr(value, "compute") else value
+
+
+def _snapshots_per_year(n_days):
+    if n_days is None:
+        n_days = 1
+    n_days = int(n_days)
+    if n_days <= 0:
+        raise ValueError(f"n_days must be positive, got {n_days}")
+    if 360 % n_days != 0:
+        raise ValueError(f"n_days={n_days} does not evenly divide the 360-day model year")
+    return 360 // n_days
+
+
+def _samples_per_month(n_days):
+    n_days = int(n_days)
+    if 30 % n_days != 0:
+        raise ValueError(f"n_days={n_days} does not evenly divide the 30-day model month")
+    return 30 // n_days
+
+
+def climatology_time_indices(n_time, center_type, n_days=1):
+    """Return the climatology-column index for each snapshot time."""
+    t = np.arange(n_time)
+    if center_type == 'seasonal':
+        return t % _snapshots_per_year(n_days)
+    if center_type == 'monthly':
+        return ((t * int(n_days)) % 360) // 30
+    raise ValueError(f"Unknown climatology center_type {center_type}")
+
+
+def center_for_time(center_ref, n_time, center_type, n_days=1, chunks=None):
+    """Broadcast a climatology center to the full snapshot time axis."""
+    center_arr = np.asarray(center_ref)
+    t_idx = climatology_time_indices(n_time, center_type, n_days)
+    if chunks is None:
+        return center_arr[:, t_idx]
+
+    row_chunks = chunks[0] if isinstance(chunks, tuple) else "auto"
+    center_dask = da.from_array(center_arr, chunks=(row_chunks, center_arr.shape[1]))
+    return center_dask[:, t_idx]
+
+
+def compute_climatology(Q_rank, center_type, n_days=1):
     """
-    Faster climatology: Reshapes to (space, years, 360) and means over years.
+    Compute a sampled 360-day climatology for spatial rows local to this rank.
+
+    seasonal -> one mean for each sampled day of the 360-day year
+    monthly  -> one mean for each 30-day month
     """
     n_space, n_time = Q_rank.shape
-    n_years = n_time // cycle_len
-    
-    # Trim Q_rank to be exactly divisible by 360 if it isn't already
-  #  Q_trimmed = Q_rank[:, :n_years * cycle_len]
-    
-    # Reshape to (space, years, 360)
-  #  Q_reshaped = Q_trimmed.reshape(n_space, n_years, cycle_len)
-    Q_reshaped = Q_rank.reshape(n_space, n_years, cycle_len)
-    
-    # Compute mean along the 'years' 
-    seasonal_mean_local = Q_reshaped.mean(axis=1).compute() # Result: (n_space, 360)
-    
-    if comm:
-        comm.Allreduce(MPI.IN_PLACE, seasonal_mean_local, op=MPI.SUM)
-    
-    return seasonal_mean_local
+    snapshots_per_year = _snapshots_per_year(n_days)
+    if n_time % snapshots_per_year != 0:
+        raise ValueError(
+            f"n_time={n_time} is not an integer number of sampled 360-day years "
+            f"for n_days={n_days}"
+        )
+
+    n_cycles = n_time // snapshots_per_year
+    Q_reshaped = Q_rank.reshape(n_space, n_cycles, snapshots_per_year)
+
+    if center_type == 'seasonal':
+        return _compute(Q_reshaped.mean(axis=1))
+
+    if center_type == 'monthly':
+        samples_per_month = _samples_per_month(n_days)
+        Q_monthly = Q_reshaped.reshape(n_space, n_cycles, 12, samples_per_month)
+        return _compute(Q_monthly.mean(axis=(1, 3)))
+
+    raise ValueError(f"Unknown climatology center_type {center_type}")
 
 
-def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
+def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='', n_days=1,
                scale_type='maxabs', save_file=None, nx=248, ny=248, nz=31):
     """
     Q_rank: dask array (space, time)
+    n_days: snapshot spacing in model days. The calendar is 360 days/year,
+        with 12 months of 30 days.
     """
     if comm is None and hasattr(n_year_train, "Get_rank"):
         comm = n_year_train
@@ -141,10 +193,14 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
     if hasattr(Q_rank, 'chunks'):
         Q_rank = ensure_time_chunks(Q_rank, target_time_chunk=min(360, n_time))
 
+    save_center = save_file and center_type != 'monthly'
+    if save_file and center_type == 'monthly' and rank == 0:
+        print("[shiftscale] Skipping monthly center cache load/save", flush=True)
+
     # check if center file already exists:
     file_exists = False
     if rank == 0:
-        if save_file and os.path.exists(save_file):
+        if save_center and os.path.exists(save_file):
             file_exists = True
 
     if comm:
@@ -160,6 +216,12 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
             
             if rank == 0:
                 with xr.open_dataset(save_file, engine="h5netcdf") as ds:
+                    if center_type in ('seasonal', 'monthly'):
+                        saved_n_days = ds.attrs.get('n_days')
+                        if saved_n_days is None or int(saved_n_days) != int(n_days):
+                            raise ValueError(
+                                f"cached {center_type} center was not created for n_days={n_days}"
+                            )
                     nz_saved = int(ds.attrs.get('nz', 1))
                     if center_type == 'global_mean':
                         global_center = np.array([ds['center'].values])
@@ -167,7 +229,7 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
                         # Load the global center (all spatial points)
                         global_center = ds['center'].values
                     
-                    if global_center.ndim > 1 and global_center.shape[1] == 1:
+                    if center_type in ('mean', 'IC') and global_center.ndim > 1 and global_center.shape[1] == 1:
                         global_center = global_center[:, 0]
                 
                 print(f"Successfully loaded center_ref from {save_file}", flush=True)
@@ -236,10 +298,10 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
                 center_ref = Q_rank[:, 0].compute()  # (space,)
 
         elif center_type == 'seasonal':
-            center_ref = compute_climatology(Q_rank, 360, comm)  # (space,360)
+            center_ref = compute_climatology(Q_rank, 'seasonal', n_days=n_days)
 
         elif center_type == 'monthly':
-            center_ref = compute_climatology(Q_rank, 12, comm)  # (space,12)
+            center_ref = compute_climatology(Q_rank, 'monthly', n_days=n_days)
 
         else:
             print("No centering specified, not centering")
@@ -251,12 +313,16 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
                     da.max(Q_rank, axis=1),
                 )
                 alpha = np.where(alpha == 0, 1.0, alpha)
+        if comm:
+            comm.Barrier()
         log_elapsed(f"Compute center complete ({center_type})", center_start)
 
         # Save reference (SAFE)
-        if save_file:
+        if save_center:
             save_center_start = time.perf_counter()
-            save_center_ref(center_ref, save_file, comm, center_type, nx=nx, ny=ny, nz=nz)
+            if rank == 0:
+                print(f"[shiftscale] Save center start ({center_type})", flush=True)
+            save_center_ref(center_ref, save_file, comm, center_type, nx=nx, ny=ny, nz=nz, n_days=n_days)
             log_elapsed(f"Save center complete ({center_type})", save_center_start)
 
     # ---------- SHIFT ----------
@@ -267,9 +333,8 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
     elif center_type == '':
         Q_shifted = Q_rank
     else:
-        cycle_len = center_ref.shape[1]
-        t_idx = da.arange(n_time, chunks=Q_rank.chunks[1]) % cycle_len
-        Q_shifted = Q_rank - center_ref[:, t_idx]
+        chunks = getattr(Q_rank, "chunks", None)
+        Q_shifted = Q_rank - center_for_time(center_ref, n_time, center_type, n_days=n_days, chunks=chunks)
 
     # ---------- SCALE BASED ON SHIFTED DATA ----------
     scale_start = time.perf_counter()
@@ -307,7 +372,7 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='',
 
 
 
-def save_center_ref(local_ref, save_path, comm, center_type, nx=248, ny=248, nz=31):
+def save_center_ref(local_ref, save_path, comm, center_type, nx=248, ny=248, nz=31, n_days=1):
     rank = comm.Get_rank()
     size = comm.Get_size()
     
@@ -317,9 +382,16 @@ def save_center_ref(local_ref, save_path, comm, center_type, nx=248, ny=248, nz=
         if rank == 0:
             # Ensure it's a simple float/array
             val = float(local_ref[0] if hasattr(local_ref, "__len__") else local_ref)
+            attrs = {
+                "center_type": center_type,
+                "nz": nz,
+                "n_days": int(n_days),
+                "calendar_days_per_year": 360,
+                "calendar_days_per_month": 30,
+            }
             ds_save = xr.Dataset(
                 {"center": ([], val)}, # No dimensions (scalar)
-                attrs={"center_type": center_type, "nz": nz}
+                attrs=attrs,
             )
             ds_save.to_netcdf(save_path, engine="h5netcdf")
             print(f"Global mean scalar saved to {save_path}", flush=True)
@@ -362,9 +434,16 @@ def save_center_ref(local_ref, save_path, comm, center_type, nx=248, ny=248, nz=
         if global_ref.ndim > 1:
             dims.append('ref_index')
 
+        attrs = {
+            "center_type": center_type,
+            "nz": actual_nz,
+            "n_days": int(n_days),
+            "calendar_days_per_year": 360,
+            "calendar_days_per_month": 30,
+        }
         ds_save = xr.Dataset(
             {"center": (dims, global_ref)}, 
-            attrs={"center_type": center_type, "nz": actual_nz}
+            attrs=attrs,
         )
         ds_save.to_netcdf(save_path, engine="h5netcdf")
         print(f"Global {center_type} spatial map saved to {save_path} (nz={actual_nz})", flush=True)

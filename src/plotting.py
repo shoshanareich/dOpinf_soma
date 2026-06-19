@@ -7,7 +7,7 @@ import opinf
 from IPython.display import HTML
 
 
-def animate_psi(fld_rom, fld_fom, timesteps, vmin=-90, vmax=90, cmap='RdBu_r', title='\psi'):
+def animate_psi(fld_rom, fld_fom, timesteps, vmin=-90, vmax=90, cmap='RdBu_r', title=r'\psi'):
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
         mesh1 = axes[0].pcolormesh(fld_fom[0], vmin=vmin, vmax=vmax, cmap=cmap)

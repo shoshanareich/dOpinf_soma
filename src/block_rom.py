@@ -88,11 +88,11 @@ if rank == 0:
     print("Training snapshots loaded. Starting shiftscale... ", flush=True)
 
 # center and scale data. immediately overwrite/delete the raw version
-U_rank_transform, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerU_{center_opt}_{n_year_train}yrs.nc')
-V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerV_{center_opt}_{n_year_train}yrs.nc')
-T_rank, centerT, alphaT = shiftscale(T_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerT_{center_opt}_{n_year_train}yrs.nc')
-S_rank, centerS, alphaS = shiftscale(S_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerS_{center_opt}_{n_year_train}yrs.nc')
-Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerEta_{center_opt}_{n_year_train}yrs.nc')
+U_rank_transform, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerU_{center_opt}_{n_year_train}yrs.nc')
+V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerV_{center_opt}_{n_year_train}yrs.nc')
+T_rank, centerT, alphaT = shiftscale(T_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerT_{center_opt}_{n_year_train}yrs.nc')
+S_rank, centerS, alphaS = shiftscale(S_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerS_{center_opt}_{n_year_train}yrs.nc')
+Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerEta_{center_opt}_{n_year_train}yrs.nc')
 
 # U_rank, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt)
 # V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt)
@@ -135,17 +135,17 @@ sval_dir = root_dir + '/svals/'
 
 if rank ==0:
     print(f'reduced dimension r1 = {svd1.r}')
-    print(f'retained energy 1 = {svd1.ret_energy[svd1.r]}')
+    print(f'retained energy 1 = {svd1.ret_energy[svd1.r - 1]}')
     svd1.save(root_dir + 'save_for_later/', prefix=f'UV_{center_opt}_r{svd1.r}_{n_year_train}trainingyrs') ## saves Tr and Qhat
     svd1.plot_decay(sval_dir + f'UVsvals_{center_opt}_{n_year_train}trainyrs_r{svd1.r}.png')
 
     print(f'reduced dimension r2 = {svd2.r}')
-    print(f'retained energy 2 = {svd2.ret_energy[svd2.r]}')
+    print(f'retained energy 2 = {svd2.ret_energy[svd2.r - 1]}')
     svd2.save(root_dir + 'save_for_later/', prefix=f'Eta_{center_opt}_r{svd2.r}_{n_year_train}trainingyrs') ## saves Tr and Qhat
     svd2.plot_decay(sval_dir + f'Etasvals_{center_opt}_{n_year_train}trainyrs_r{svd2.r}.png')
 
     print(f'reduced dimension r3 = {svd3.r}')
-    print(f'retained energy 3 = {svd3.ret_energy[svd3.r]}')
+    print(f'retained energy 3 = {svd3.ret_energy[svd3.r - 1]}')
     svd3.save(root_dir + 'save_for_later/', prefix=f'TS_{center_opt}_r{svd3.r}_{n_year_train}trainingyrs') ## saves Tr and Qhat
     svd3.plot_decay(sval_dir + f'TSsvals_{center_opt}_{n_year_train}trainyrs_r{svd3.r}.png')
 

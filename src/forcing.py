@@ -21,7 +21,26 @@ def build_rom_inputs(Tmax, tau4, n_year_train, n_days, block=False):
         return np.vstack((Tmax_train, tau4_train))
     
 
-def apply_center_and_scale(field, centers, alphas, var_name, nxy, center_opt, n_year_train):
+def _center_time_indices(n_time, center_opt, n_days):
+    if n_days <= 0 or 360 % n_days != 0:
+        raise ValueError(f"n_days must be a positive divisor of 360, got {n_days}")
+    if center_opt == 'seasonal':
+        return np.arange(n_time) % (360 // n_days)
+    if center_opt == 'monthly':
+        if 30 % n_days != 0:
+            raise ValueError(f"n_days must divide the 30-day model month, got {n_days}")
+        return ((np.arange(n_time) * n_days) % 360) // 30
+    raise ValueError(f"{center_opt!r} is not a climatology center")
+
+
+def _expand_center(center_sel, n_time, center_opt, n_days):
+    center_arr = np.asarray(center_sel)
+    if center_arr.ndim == 1:
+        return center_arr[:, None]
+    return center_arr[:, _center_time_indices(n_time, center_opt, n_days)]
+
+
+def apply_center_and_scale(field, centers, alphas, var_name, nxy, center_opt, n_year_train, n_days=1):
     """
     Center and scale a surface forcing field (SST, SSS, SSU, etc.)
 
@@ -41,6 +60,8 @@ def apply_center_and_scale(field, centers, alphas, var_name, nxy, center_opt, n_
         One of ['mean', 'IC', 'seasonal', 'monthly']
     n_year_train : int
         Number of years to tile seasonal/monthly centers
+    n_days : int
+        Snapshot spacing in days on a 360-day calendar with 30-day months.
     """
     
 
@@ -51,25 +72,8 @@ def apply_center_and_scale(field, centers, alphas, var_name, nxy, center_opt, n_
         center_sel = centers[var_name][:nxy]  # select first nxy spatial points
         center_rep = center_sel[:, None]  # (space, 1)
     else:
-        # tile seasonal/monthly pattern along time for n_year_train
         center_sel = centers[var_name][:nxy]  # select first nxy spatial points
-        cycle_len = center_sel.shape[1]
-    
-        # Calculate how many full repeats (e.g., 1801 // 360 = 5)
-        num_repeats = field.shape[1] // cycle_len
-        
-        # Calculate the remainder (e.g., 1801 % 360 = 1)
-        remainder = field.shape[1] % cycle_len
-        
-        # Tile the full years
-        full_tiles = np.tile(center_sel, (1, num_repeats))
-        
-        #  Append the partial cycle to hit exactly n_time
-        if remainder > 0:
-            leftover_cols = center_sel[:, :remainder]
-            center_rep = np.hstack([full_tiles, leftover_cols])
-        else:
-            center_rep = full_tiles
+        center_rep = _expand_center(center_sel, field.shape[1], center_opt, n_days)
 
 
     # center and scale
@@ -77,7 +81,7 @@ def apply_center_and_scale(field, centers, alphas, var_name, nxy, center_opt, n_
 
 
 
-def project_surface_forcings(ds_surface, Tr_global, centers, alphas, forcings, nx, ny, nz, center_opt, n_year_train, block=False):
+def project_surface_forcings(ds_surface, Tr_global, centers, alphas, forcings, nx, ny, nz, center_opt, n_year_train, block=False, n_days=1):
     """
         Project surface forcings onto the POD basis
         F_project,sst = V_sst^T @ F
@@ -102,9 +106,9 @@ def project_surface_forcings(ds_surface, Tr_global, centers, alphas, forcings, n
         
 
     # --- apply training centering & scaling ---
-    SSTc = apply_center_and_scale(SST, centers, alphas, 'T', nxy, center_opt[0], n_year_train)
-    SSSc = apply_center_and_scale(SSS, centers, alphas, 'S', nxy, center_opt[0], n_year_train)
-    SSUc = apply_center_and_scale(SSU, centers, alphas, 'U', nxy, center_opt[1], n_year_train)
+    SSTc = apply_center_and_scale(SST, centers, alphas, 'T', nxy, center_opt[0], n_year_train, n_days=n_days)
+    SSSc = apply_center_and_scale(SSS, centers, alphas, 'S', nxy, center_opt[0], n_year_train, n_days=n_days)
+    SSUc = apply_center_and_scale(SSU, centers, alphas, 'U', nxy, center_opt[1], n_year_train, n_days=n_days)
 
 
     # --- project ---

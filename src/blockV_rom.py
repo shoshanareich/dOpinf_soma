@@ -83,11 +83,11 @@ if rank == 0:
     print("Training snapshots loaded. Starting shiftscale... ", flush=True)
 
 # center and scale data. immediately overwrite/delete the raw version
-U_rank, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerU_{center_opt}_{n_year_train}yrs.nc')
-V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerV_{center_opt}_{n_year_train}yrs.nc')
-T_rank, centerT, alphaT = shiftscale(T_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerT_{center_opt}_{n_year_train}yrs.nc')
-S_rank, centerS, alphaS = shiftscale(S_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerS_{center_opt}_{n_year_train}yrs.nc')
-Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_opt, save_file=root_dir + f'save_for_later/centerEta_{center_opt}_{n_year_train}yrs.nc')
+U_rank, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerU_{center_opt}_{n_year_train}yrs.nc')
+V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerV_{center_opt}_{n_year_train}yrs.nc')
+T_rank, centerT, alphaT = shiftscale(T_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerT_{center_opt}_{n_year_train}yrs.nc')
+S_rank, centerS, alphaS = shiftscale(S_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerS_{center_opt}_{n_year_train}yrs.nc')
+Eta_rank, centerEta, alphaEta = shiftscale(Eta_rank, comm, center_type=center_opt, n_days=n_days, save_file=root_dir + f'save_for_later/centerEta_{center_opt}_{n_year_train}yrs.nc')
 
 # U_rank, centerU, alphaU = shiftscale(U_rank, comm, center_type=center_opt)
 # V_rank, centerV, alphaV = shiftscale(V_rank, comm, center_type=center_opt)
@@ -126,7 +126,7 @@ sval_dir = root_dir + '/svals/'
 
 if rank ==0:
     print(f'reduced dimension r_uve = {svd_uve.r}, r_ts = {svd_ts.r}')
-    print(f'retained energy_uve = {svd_uve.ret_energy[svd_uve.r]}, retained energy_ts = {svd_ts.ret_energy[svd_ts.r]}')
+    print(f'retained energy_uve = {svd_uve.ret_energy[svd_uve.r - 1]}, retained energy_ts = {svd_ts.ret_energy[svd_ts.r - 1]}')
     svd_uve.save(root_dir + 'blockV/', prefix=f'UVEta_{center_opt}_r{svd_uve.r}_{n_year_train}trainingyrs') ## saves Tr and Qhat
     svd_ts.save(root_dir + 'blockV/', prefix=f'TS_{center_opt}_r{svd_ts.r}_{n_year_train}trainingyrs') ## saves Tr and Qhat
     svd_uve.plot_decay(sval_dir + f'svals_UVEta_{center_opt}_{n_year_train}trainyrs_r{svd_uve.r}.png')
@@ -172,7 +172,7 @@ if rank ==0:
         'S': xr.open_dataset(root_dir + f'save_for_later/centerS_{center_opt}_{n_year_train}yrs.nc').center.values
     }
     alphas  = {'T': alphaT,  'S': alphaS,  'U': alphaU}
-    B, C = project_surface_forcings(ds_surface, [svd_uve.Tr_global, svd_ts.Tr_global],centers,alphas,forcings,nx, ny, nz, center_opt, n_year_train, block=True)
+    B, C = project_surface_forcings(ds_surface, [svd_uve.Tr_global, svd_ts.Tr_global],centers,alphas,forcings,nx, ny, nz, center_opt, n_year_train, block=True, n_days=n_days)
 
     # np.save(root_dir + f'for_nicole/projected_input_operator_r{svd.r}_{center_opt}_{n_year_train}trainyrs.npy', B)
     # np.save(root_dir + f'for_nicole/projected_constant_operator_r{svd.r}_{center_opt}_{n_year_train}trainyrs.npy', C)
@@ -322,4 +322,3 @@ if rank ==0:
 #     vid = plotter.animate_monthly(Eta_ROM_monthlymean, Eta_FOM_monthlymean, timesteps=range(Eta_FOM_monthlymean.shape[0]))
 #     HTML(vid.to_jshtml())
 #     vid.save(save_dir +f'monthly_avg_r{svd.r}_{center_opt}_{n_year_train}yrs.gif')
-
