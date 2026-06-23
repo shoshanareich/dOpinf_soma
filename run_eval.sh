@@ -22,7 +22,7 @@ export UCX_TLS="${UCX_TLS:-rc,sm,self}"
 
 root_dir=/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/
 #CONFIG_FILE="$root_dir/configs/config_${SLURM_ARRAY_TASK_ID}.json"
-CONFIG_FILE="$root_dir/configs_forcings/config_forcings_8.json"
+CONFIG_FILE="$root_dir/configs_forcings/config_forcings_10.json"
 scratch_root_dir=/scratch2/shoshi/soma4/dOpInf_results/save_roms/taus_1_5_sameIC/
 
 
@@ -45,7 +45,7 @@ else
     SUFFIX="unknown"
 fi
 
-SUFFIX="r45"
+SUFFIX="r65"
 
 
 JOB_ID="${SLURM_ARRAY_JOB_ID:-local}"

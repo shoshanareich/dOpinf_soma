@@ -40,7 +40,7 @@ from config_utils import resolve_forcing_config
 from utils import *
 from shiftscale import *
 from svd import SVDDecomposition
-from learn_rom import TikhonovSweep
+from learn_rom import TikhonovSweep, fit_sequential_model
 import gc # garbage cleanup
 
 if MPI.COMM_WORLD.Get_rank() == 0:
@@ -84,6 +84,7 @@ n_days = config['n_days']
 center_opt = config['center_opt']
 scale = config['scale']
 dir_extension = config.get('dir_extension', 'default_extension')
+block_years = config.get('block_years')
 forcing_config = resolve_forcing_config(config)
 train_taus = forcing_config['train_taus']
 test_taus = forcing_config['test_taus']
@@ -119,6 +120,11 @@ if len(train_taus) != len(snapshot_dirs):
 
 if len(test_taus) != len(test_dirs):
     raise ValueError("'test_taus' must have the same length as test directories")
+
+if block_years is not None:
+    block_years = int(block_years)
+    if block_years <= 0:
+        raise ValueError("'block_years' must be a positive integer")
 
 n_days_per_year = int(360 / n_days)
 nt = n_days_per_year * n_year_train 
@@ -392,7 +398,10 @@ if rank == 0:
     # cond = np.linalg.cond(svd.Qhat_global)
     # print(f'condition number: {cond}')
 
-    print('learn ROM', flush=True)
+    if block_years is None:
+        print('learn ROM', flush=True)
+    else:
+        print(f'learn ROM sequentially with {block_years}-year blocks', flush=True)
     rom_learning_start = time.perf_counter()
     rom_learning_payload = {
         "states_list": states_list,
@@ -413,32 +422,53 @@ C = rom_learning_payload["C"]
 weights_A = rom_learning_payload["weights_A"]
 weights_H = rom_learning_payload["weights_H"]
 
-## regularization parameter search 
-sweep = TikhonovSweep(
-    Qs_=states_list,
-    inputs=inputs_list,
-    B=B,
-    C=C,
-    r=svd.r,
-    nt=nt,
-    t=t,
-    weights_A=weights_A,
-    weights_H=weights_H,
-    # norm_weights=abs(W_),
-)
+if block_years is None:
+    ## regularization parameter search 
+    sweep = TikhonovSweep(
+        Qs_=states_list,
+        inputs=inputs_list,
+        B=B,
+        C=C,
+        r=svd.r,
+        nt=nt,
+        t=t,
+        weights_A=weights_A,
+        weights_H=weights_H,
+        # norm_weights=abs(W_),
+    )
 
 
-# grid search for best regularization parameters
-reg_A, reg_H, best_err = sweep.run_mpi(comm)
+    # grid search for best regularization parameters
+    reg_A, reg_H, best_err = sweep.run_mpi(comm)
+
+    if rank == 0:
+        print("Best:", best_err, reg_A, reg_H)
+
+        # build final model with best reg params
+        model = sweep.fit_best_model()
+        model.model.save(results_dir + 'model.h5', overwrite=True)
+        log_timing('Finished ROM learning', rom_learning_start)
+else:
+    model = fit_sequential_model(
+        Qs_=states_list,
+        inputs=inputs_list,
+        B=B,
+        C=C,
+        r=svd.r,
+        n_year_train=n_year_train,
+        n_days=n_days,
+        block_years=block_years,
+        weights_A=weights_A,
+        weights_H=weights_H,
+        comm=comm,
+        t=t,
+    )
+
+    if rank == 0:
+        model.model.save(results_dir + 'model.h5', overwrite=True)
+        log_timing('Finished sequential ROM learning', rom_learning_start)
 
 if rank == 0:
-    print("Best:", best_err, reg_A, reg_H)
-
-    # build final model with best reg params
-    model = sweep.fit_best_model()
-    model.model.save(results_dir + 'model.h5', overwrite=True)
-    log_timing('Finished ROM learning', rom_learning_start)
-
     # Generate scenario labels from snapshot directory names
     # Extract meaningful names from full paths (e.g., 'run_10yrspinup_tau0.1/' -> 'tau0.1')
     scenario_labels = []

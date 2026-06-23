@@ -1065,8 +1065,27 @@ def find_psi_rom_path(scenario: Scenario, args: argparse.Namespace) -> Path | No
     return None
 
 
+def select_psi_samples(ds: xr.Dataset, total_model_days: int, n_days: int, label: str) -> xr.Dataset:
+    """Select the requested model window without double-striding sampled ROM files."""
+    expected_samples = total_model_days // n_days
+    n_time = ds.sizes.get("time")
+    if n_time is None:
+        return ds
+    if n_time >= total_model_days:
+        return ds.isel(time=slice(0, total_model_days, n_days))
+    if n_time >= expected_samples:
+        return ds.isel(time=slice(0, expected_samples))
+    print(
+        f"Warning: {label} has only {n_time} psi time samples; "
+        f"expected {expected_samples} for n_days={n_days}."
+    )
+    return ds
+
+
 def maybe_plot_psi(scenarios: list[Scenario], args: argparse.Namespace, outdir: Path) -> None:
     plot_data = []
+    total_model_days = 360 * (args.n_year_train + args.n_year_predict)
+    snapshots_per_month = samples_per_month(args.n_days)
     for scenario in scenarios:
         psi_fom_path = Path(scenario.fom_dir) / "psi_20yrs.nc"
         if not psi_fom_path.exists():
@@ -1074,21 +1093,32 @@ def maybe_plot_psi(scenarios: list[Scenario], args: argparse.Namespace, outdir: 
         psi_rom_path = find_psi_rom_path(scenario, args)
         if psi_rom_path is None:
             continue
-        psi = xr.open_dataset(psi_fom_path).isel(
-            time=slice(0, 360 * (args.n_year_train + args.n_year_predict), args.n_days)
+        psi = select_psi_samples(
+            xr.open_dataset(psi_fom_path),
+            total_model_days,
+            args.n_days,
+            f"FOM psi for {scenario.label}",
         )
-        psi_rom = xr.open_dataset(psi_rom_path).isel(
-            time=slice(0, 360 * (args.n_year_train + args.n_year_predict), args.n_days)
+        psi_rom = select_psi_samples(
+            xr.open_dataset(psi_rom_path),
+            total_model_days,
+            args.n_days,
+            f"ROM psi for {scenario.label}",
         )
         fom_var = "psi_bt" if "psi_bt" in psi else list(psi.data_vars)[0]
         rom_var = "psi" if "psi" in psi_rom else list(psi_rom.data_vars)[0]
-        snapshots_per_month = int(30 / args.n_days)
         fom_monthly = psi[fom_var].coarsen(time=snapshots_per_month, boundary="trim").mean()
         rom_monthly = psi_rom[rom_var].coarsen(time=snapshots_per_month, boundary="trim").mean()
+        nt_monthly = min(fom_monthly.sizes["time"], rom_monthly.sizes["time"])
+        if nt_monthly == 0:
+            print(f"Skipping psi plots for {scenario.label}; no complete monthly psi windows found.")
+            continue
+        fom_monthly = fom_monthly.isel(time=slice(0, nt_monthly))
+        rom_monthly = rom_monthly.isel(time=slice(0, nt_monthly))
         if np.nanmax(np.abs(fom_monthly.values)) > 1e4:
             fom_monthly = fom_monthly / 1e6
         rom_monthly = rom_monthly.assign_coords(time=fom_monthly["time"])
-        month_idx = min(args.month_idx, fom_monthly.sizes["time"] - 1, rom_monthly.sizes["time"] - 1)
+        month_idx = min(args.month_idx, nt_monthly - 1)
         plot_data.append((scenario.label, fom_monthly.isel(time=month_idx), rom_monthly.isel(time=month_idx)))
 
     if not plot_data:

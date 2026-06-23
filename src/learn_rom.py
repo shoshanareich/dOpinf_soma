@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.linalg as la
+import scipy.linalg as sla
 import opinf
 import pickle
 from pathlib import Path
@@ -35,44 +36,129 @@ def weighted_lp_error(Q_true, Q_approx, weights=None, normalize=True):
     return absolute_error
 
 
+class ShiftedTikhonovSolver(opinf.lstsq.TikhonovSolver):
+    """Tikhonov solver that regularizes toward a nonzero operator matrix."""
+
+    def __init__(self, regularizer=None, target_operator_matrix=None, method="lstsq"):
+        super().__init__(regularizer, method=method)
+        self.target_operator_matrix = None
+        if target_operator_matrix is not None:
+            self.target_operator_matrix = np.asarray(target_operator_matrix)
+
+    def _check_target_shape(self):
+        if self.target_operator_matrix is None:
+            raise AttributeError("target_operator_matrix not set")
+        expected = (self.r, self.d)
+        if self.target_operator_matrix.shape != expected:
+            raise ValueError(
+                "target_operator_matrix.shape = "
+                f"{self.target_operator_matrix.shape} != {expected}"
+            )
+
+    def fit(self, data_matrix, lhs_matrix):
+        super().fit(data_matrix, lhs_matrix)
+        self._check_target_shape()
+        return self
+
+    def solve(self):
+        if self.regularizer is None:
+            raise AttributeError("solver regularizer not set")
+        self._check_target_shape()
+
+        target_t = self.target_operator_matrix.T
+        if self.method == "lstsq":
+            data_padded = np.vstack((self.data_matrix, self.regularizer))
+            lhs_padded = np.vstack((self.lhs_matrix.T, self.regularizer @ target_t))
+            return sla.lstsq(data_padded, lhs_padded, **self.options)[0].T
+
+        regt_reg = self.regularizer.T @ self.regularizer
+        lhs = self._DtZt + regt_reg @ target_t
+        return sla.solve(self._DtD + regt_reg, lhs, assume_a="pos").T
+
+    def regresidual(self, Ohat):
+        residual = self.residual(Ohat)
+        diff = (Ohat - self.target_operator_matrix).T
+        return residual + np.sum((self.regularizer @ diff) ** 2, axis=0)
 
 
-def fit_and_score_model(reg_A, reg_H, *, Qs_, inputs, B, C, r, nt, t, weights=None):
-    """Fit ROM with given regularization and return (converged, error)."""
+def _learned_operator_templates():
+    return [
+        opinf.operators.ConstantOperator(),
+        opinf.operators.LinearOperator(),
+        opinf.operators.QuadraticOperator(),
+    ]
 
-    if reg_A > reg_H:
-        return False, np.inf
 
+def _make_regularizer(reg_A, reg_H, r):
     reg_c = reg_A
-
-    regularizer = opinf.lstsq.TikhonovSolver.get_operator_regularizer(
-        operators=[
-            opinf.operators.ConstantOperator(),
-            opinf.operators.LinearOperator(),
-            opinf.operators.QuadraticOperator(),
-          #  opinf.operators.InputOperator(),
-          #  opinf.operators.CubicOperator(),
-        ],
+    return opinf.lstsq.TikhonovSolver.get_operator_regularizer(
+        operators=_learned_operator_templates(),
         regularization_parameters=[reg_c, reg_A, reg_H],
         state_dimension=r,
-       # input_dimension=len(inputs),
     )
 
-    solver = opinf.lstsq.TikhonovSolver(regularizer, method="lstsq")
 
+def _make_solver(reg_A, reg_H, r, regularization_target=None):
+    regularizer = _make_regularizer(reg_A, reg_H, r)
+    if regularization_target is None:
+        return opinf.lstsq.TikhonovSolver(regularizer, method="lstsq")
+    return ShiftedTikhonovSolver(
+        regularizer,
+        target_operator_matrix=regularization_target,
+        method="lstsq",
+    )
+
+
+def _make_model(B, C, solver):
     operators = [
         opinf.operators.InputOperator(entries=B),
         opinf.operators.ConstantOperator(entries=C),
         opinf.operators.ConstantOperator(),
         opinf.operators.LinearOperator(),
         opinf.operators.QuadraticOperator(),
-        #opinf.operators.InputOperator(),
-       # opinf.operators.CubicOperator()
     ]
-            
-    #model = opinf.models.DiscreteModel(operators, solver=solver)
-    #model = model.fit(states=Qs_, inputs=inputs)
-    rom = opinf.ROM(model=opinf.models.DiscreteModel(operators, solver=solver))
+    return opinf.ROM(model=opinf.models.DiscreteModel(operators, solver=solver))
+
+
+def freeze_model(model):
+    """Return a prediction-only ROM with all fitted operators fixed."""
+    operators = [
+        type(operator)(entries=np.array(operator.entries, copy=True))
+        for operator in model.model.operators
+    ]
+    return opinf.ROM(model=opinf.models.DiscreteModel(operators))
+
+
+def get_learned_operator_matrix(model):
+    return np.array(model.model.operator_matrix, copy=True)
+
+
+
+
+def fit_and_score_model(
+    reg_A,
+    reg_H,
+    *,
+    Qs_,
+    inputs,
+    B,
+    C,
+    r,
+    nt,
+    t,
+    weights=None,
+    regularization_target=None,
+):
+    """Fit ROM with given regularization and return (converged, error)."""
+
+    if reg_A > reg_H:
+        return False, np.inf
+
+    rom = _make_model(
+        B,
+        C,
+        solver=_make_solver(reg_A, reg_H, r, regularization_target),
+    )
     model = rom.fit(states=Qs_, inputs=inputs)
 
 
@@ -116,6 +202,7 @@ class TikhonovSweep:
         weights_A,
         weights_H,
         norm_weights=None,
+        regularization_target=None,
     ):
         self.Qs_ = Qs_
         self.inputs = inputs
@@ -127,6 +214,7 @@ class TikhonovSweep:
 
         self.weights_A = weights_A
         self.weights_H = weights_H
+        self.regularization_target = regularization_target
         #self.norm_weights = norm_weights
         if norm_weights is None:
             self.norm_weights = np.ones(r)
@@ -158,7 +246,8 @@ class TikhonovSweep:
                     r=self.r,
                     nt=self.nt,
                     t=self.t,
-                    weights=self.norm_weights
+                    weights=self.norm_weights,
+                    regularization_target=self.regularization_target,
                 )
 
                 self.converged[i, j] = converged
@@ -204,6 +293,7 @@ class TikhonovSweep:
                     nt=self.nt,
                     t=self.t,
                     weights=self.norm_weights,
+                    regularization_target=self.regularization_target,
                 )
                 failure = None
             except Exception as exc:
@@ -294,41 +384,115 @@ class TikhonovSweep:
         if self.best_reg_A is None:
             raise RuntimeError("run() or load() must be called first.")
 
-        reg_A = self.best_reg_A
-        reg_H = self.best_reg_H
-        reg_c = reg_A
-
-        regularizer = opinf.lstsq.TikhonovSolver.get_operator_regularizer(
-            operators=[
-                opinf.operators.ConstantOperator(),
-                opinf.operators.LinearOperator(),
-                opinf.operators.QuadraticOperator(),
-                #opinf.operators.InputOperator(),
-               # opinf.operators.CubicOperator(),
-            ],
-            regularization_parameters=[reg_c, reg_A, reg_H],
-            state_dimension=self.r,
-          #  input_dimension=len(self.inputs),
+        rom = _make_model(
+            self.B,
+            self.C,
+            solver=_make_solver(
+                self.best_reg_A,
+                self.best_reg_H,
+                self.r,
+                self.regularization_target,
+            ),
         )
-
-        solver = opinf.lstsq.TikhonovSolver(regularizer, method='lstsq')
-
-        operators = [
-            opinf.operators.InputOperator(entries=self.B),
-            opinf.operators.ConstantOperator(entries=self.C),
-            opinf.operators.ConstantOperator(),
-            opinf.operators.LinearOperator(),
-            opinf.operators.QuadraticOperator(),
-           # opinf.operators.InputOperator(),
-            #opinf.operators.CubicOperator(),
-        ]
-
-        # model = opinf.models.DiscreteModel(operators, solver=solver)
-
-        # # Fit with all training states and inputs
-        # model = model.fit(states=self.Qs_, inputs=self.inputs)
-
-        rom = opinf.ROM(model=opinf.models.DiscreteModel(operators, solver=solver))
         model = rom.fit(states=self.Qs_, inputs=self.inputs)
 
         return model
+
+
+def fit_sequential_model(
+    *,
+    Qs_,
+    inputs,
+    B,
+    C,
+    r,
+    n_year_train,
+    n_days,
+    block_years,
+    weights_A,
+    weights_H,
+    comm,
+    norm_weights=None,
+    t=None,
+    verbose=True,
+):
+    """Fit blocks of training years, anchoring each block to the previous fit."""
+    if block_years is None:
+        raise ValueError("block_years must be defined for sequential learning")
+    block_years = int(block_years)
+    if block_years <= 0:
+        raise ValueError("block_years must be a positive integer")
+
+    snapshots_per_year = int(360 / n_days)
+    total_nt = snapshots_per_year * n_year_train
+    block_nt = snapshots_per_year * block_years
+    if block_nt < 2:
+        raise ValueError("Each sequential block must contain at least two snapshots")
+
+    rank = comm.Get_rank()
+    target = None
+    final_model = None
+
+    for block_index, start in enumerate(range(0, total_nt, block_nt)):
+        stop = min(start + block_nt, total_nt)
+        current_nt = stop - start
+        if current_nt < 2:
+            if rank == 0 and verbose:
+                print(
+                    f"skipping final sequential block with {current_nt} snapshot",
+                    flush=True,
+                )
+            continue
+
+        states_block = [Q[:, start:stop] for Q in Qs_]
+        inputs_block = [U[..., start:stop] for U in inputs]
+        start_year = start / snapshots_per_year
+        stop_year = stop / snapshots_per_year
+
+        if rank == 0 and verbose:
+            if target is None:
+                anchor_msg = "zero"
+            else:
+                anchor_msg = "previous operators"
+            print(
+                "sequential block "
+                f"{block_index + 1}: years {start_year:g}-{stop_year:g}, "
+                f"regularizing toward {anchor_msg}",
+                flush=True,
+            )
+
+        sweep = TikhonovSweep(
+            Qs_=states_block,
+            inputs=inputs_block,
+            B=B,
+            C=C,
+            r=r,
+            nt=current_nt,
+            t=t,
+            weights_A=weights_A,
+            weights_H=weights_H,
+            norm_weights=norm_weights,
+            regularization_target=target,
+        )
+        reg_A, reg_H, best_err = sweep.run_mpi(comm, verbose=verbose)
+        if reg_A is None:
+            raise RuntimeError(
+                f"No converged regularization candidate for sequential block {block_index + 1}"
+            )
+
+        if rank == 0 and verbose:
+            print(
+                f"Best sequential block {block_index + 1}: "
+                f"{best_err} {reg_A} {reg_H}",
+                flush=True,
+            )
+
+        if rank == 0:
+            final_model = sweep.fit_best_model()
+            target = get_learned_operator_matrix(final_model)
+        target = comm.bcast(target, root=0)
+
+    if rank == 0 and final_model is None:
+        raise RuntimeError("Sequential learning did not fit any blocks")
+
+    return freeze_model(final_model) if rank == 0 else None

@@ -325,6 +325,13 @@ def shiftscale(Q_rank, n_year_train=None, comm=None, center_type='', n_days=1,
             save_center_ref(center_ref, save_file, comm, center_type, nx=nx, ny=ny, nz=nz, n_days=n_days)
             log_elapsed(f"Save center complete ({center_type})", save_center_start)
 
+    # Center files are stored as float64, but the snapshot data are usually
+    # float32. Cast after cache loading so shifting does not promote the whole
+    # SVD input to float64 and double Gram-assembly memory.
+    q_dtype = np.dtype(getattr(Q_rank, "dtype", np.float64))
+    if np.issubdtype(q_dtype, np.floating) and center_type != '':
+        center_ref = np.asarray(center_ref, dtype=q_dtype)
+
     # ---------- SHIFT ----------
     if center_type == 'global_mean':
         Q_shifted = Q_rank - center_ref[0]
