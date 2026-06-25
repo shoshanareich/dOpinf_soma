@@ -161,11 +161,20 @@ time_chunk = min(360, 360 * n_year_train)
 for snapshot_dir in snapshot_dirs:
     ds = xr.open_dataset(
         snapshot_dir + 'states_20yrs.nc',
-        engine="h5netcdf",
+        engine="netcdf4",
         decode_timedelta=False,
         decode_times=False,
         chunks={"time": time_chunk, "i": i_chunk, "i_g": i_chunk},
-    )  # , backend_kwargs={'driver': 'mpio'})
+    )
+
+    # Fail loudly if the backend dropped data variables (h5netcdf did this silently
+    # for some files on the compute nodes -> cryptic KeyError later in reshape_data).
+    missing = [v for v in ("U", "V", "Eta", "T", "S") if v not in ds.variables]
+    if missing:
+        raise KeyError(
+            f"{snapshot_dir}states_20yrs.nc opened without {missing}; "
+            f"present variables: {list(ds.variables)}"
+        )
 
     U_rank, V_rank, Eta_rank, T_rank, S_rank = reshape_data(nx, n_days, n_year_train, ds, rank, size)
     
