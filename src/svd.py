@@ -114,15 +114,18 @@ class SVDDecomposition:
 
         # Global reduction
         if rank == 0:
-            print(f"[SVD] Local Gram complete. Starting MPI allreduce | {_format_elapsed(local_gram_start)}", flush=True)
+            print(f"[SVD] Local Gram complete. Starting MPI reduce | {_format_elapsed(local_gram_start)}", flush=True)
+
+        # Buffer-based Reduce (lowercase allreduce pickles the ~nt x nt matrix and is
+        # orders of magnitude slower). Only rank 0 needs the global Gram for eigh.
+        D_rank = np.ascontiguousarray(D_rank, dtype=np.float64)
         if rank == 0:
             self.D_global = np.empty_like(D_rank)
         else:
             self.D_global = None
 
-        # Use low-level Allreduce (buffer-based)
         allreduce_start = time.perf_counter()
-        self.D_global = comm.allreduce(D_rank, op=MPI.SUM)
+        comm.Reduce(D_rank, self.D_global, op=MPI.SUM, root=0)
         del D_rank
 
         if rank ==0:

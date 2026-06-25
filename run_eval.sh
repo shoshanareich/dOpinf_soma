@@ -98,6 +98,7 @@ echo "[timing] Starting eval_rom_forcings.py at $(date '+%Y-%m-%d %H:%M:%S')"
 python3 "$root_dir/src/eval_rom_forcings.py" \
     --config "$CONFIG_FILE" \
     --root-dir "$scratch_root_dir" \
+    --preproc-dir "$scratch_root_dir" \
     --data-dir "$RESULTS_DIR" \
     --outdir "$RESULTS_DIR/analysis"
 EVAL_STATUS=$?
