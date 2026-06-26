@@ -27,8 +27,17 @@ scratch_base=/scratch2/shoshi/soma4/dOpInf_results
 config_dir="$root_dir/configs_forcings/taus_2_4"
 
 GROUP=${SLURM_ARRAY_TASK_ID:-0}
-# contiguous triples: group g -> config indices 3g, 3g+1, 3g+2
-CONFIG_IDXS=( $((GROUP * 3)) $((GROUP * 3 + 1)) $((GROUP * 3 + 2)) )
+# Override: TAUS24_CONFIGS="0,5" runs exactly those config indices (sequentially) for a
+# targeted re-run, e.g. after an intermittent fabric crash:
+#   TAUS24_CONFIGS=0,5 sbatch --array=0 run_roms_taus24.sh
+# CAUTION: don't run a config that shares (dir_extension, center_opt, n_year_train) with
+# one still running elsewhere -- they write the same center*/transformed-surface files.
+if [ -n "$TAUS24_CONFIGS" ]; then
+    IFS=',' read -ra CONFIG_IDXS <<< "$TAUS24_CONFIGS"
+else
+    # contiguous triples: group g -> config indices 3g, 3g+1, 3g+2
+    CONFIG_IDXS=( $((GROUP * 3)) $((GROUP * 3 + 1)) $((GROUP * 3 + 2)) )
+fi
 
 export ROM_POINTER_DIR="$root_dir"
 GROUP_START=$SECONDS

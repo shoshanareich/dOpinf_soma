@@ -114,7 +114,7 @@ class SVDDecomposition:
 
         # Global reduction
         if rank == 0:
-            print(f"[SVD] Local Gram complete. Starting MPI reduce | {_format_elapsed(local_gram_start)}", flush=True)
+            print(f"[SVD] Local Gram assembly complete (Q^T Q) | {_format_elapsed(local_gram_start)}", flush=True)
 
         # Buffer-based Reduce (lowercase allreduce pickles the ~nt x nt matrix and is
         # orders of magnitude slower). Only rank 0 needs the global Gram for eigh.
@@ -129,7 +129,7 @@ class SVDDecomposition:
         del D_rank
 
         if rank ==0:
-            print(f"[SVD] Allreduce complete. Starting eigendecomposition | {_format_elapsed(allreduce_start)}", flush=True)
+            print(f"[SVD] MPI reduce complete | {_format_elapsed(allreduce_start)}", flush=True)
 
             # Eigendecomposition
             eig_start = time.perf_counter()
