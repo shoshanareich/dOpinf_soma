@@ -242,12 +242,24 @@ log_timing("Finished shiftscale", shiftscale_start)
 
 
 
-## save transformed surface fields for forcing projection:
+## save surface fields for the imposed-B/C forcing projection.
+## These must be CENTERED ONLY (not scaled): imposing B in the scaled ODE
+## multiplies it by alpha, which exactly cancels the 1/alpha baked into the
+## scaled basis -> alpha * Tr^T Q_scaled^T B = Tr^T Q_centered^T B. shiftscale
+## returned centered-AND-scaled fields, so undo the per-point scaling here.
+## (Multiplying the scaled field by alpha recovers Q - center for any center_opt,
+## including time-varying seasonal/monthly centers.)
+pts_per_surf = ny * (nx // size)
 
-pts_per_surf = ny * (nx // size) 
-SST_rank_surf = T_rank[:pts_per_surf, :] 
-SSS_rank_surf = S_rank[:pts_per_surf, :] 
-SSU_rank_surf = U_rank_transform[:pts_per_surf, :] 
+def _centered_surface(field_scaled, alpha_total):
+    # alpha_total is a per-point column vector (shape (nspace,1)) for scale='var',
+    # or a scalar (1) when scale is None; slice to the surface points either way.
+    alpha_surf = alpha_total[:pts_per_surf] if np.ndim(alpha_total) else alpha_total
+    return field_scaled[:pts_per_surf, :] * alpha_surf
+
+SST_rank_surf = _centered_surface(T_rank, alphaT)
+SSS_rank_surf = _centered_surface(S_rank, alphaS)
+SSU_rank_surf = _centered_surface(U_rank_transform, alphaU)
 
 # gather and save
 if rank == 0:

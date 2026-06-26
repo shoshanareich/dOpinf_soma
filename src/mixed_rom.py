@@ -1,3 +1,11 @@
+# =============================================================================
+# FROZEN — do not edit. Original single-forcing driver, kept as a reference for
+# the pre-multi-forcing experiments. New work (single or multi forcing) uses
+# src/mixed_rom_forcings.py, a superset of this driver that carries the bug
+# fixes (global-alpha gather, netcdf4 engine, MPI grid search) and projects the
+# imposed B/C from centered-only surfaces, matching this driver's behavior.
+# Run a single scenario there by setting train_taus=[tau].
+# =============================================================================
 from mpi4py import MPI
 import sys
 import os
