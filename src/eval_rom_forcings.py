@@ -495,7 +495,11 @@ def as_dataarray_like(template: xr.DataArray, values: xr.DataArray | np.ndarray,
     arr = values.values if isinstance(values, xr.DataArray) else np.asarray(values)
     nt = min(template.sizes["time"], arr.shape[0])
     template = template.isel(time=slice(0, nt))
-    return xr.DataArray(arr[:nt], coords=template.coords, dims=template.dims, name=name)
+    da = xr.DataArray(arr[:nt], coords=template.coords, dims=template.dims, name=name)
+    # MITgcm carries an auxiliary 'iter' coordinate along time whose values differ
+    # between fields/scenarios; drop it so several fields merge into one Dataset.
+    drop = [c for c in ("iter",) if c in da.coords]
+    return da.drop_vars(drop) if drop else da
 
 
 def save_surface_fields(fields_by_scenario: dict[str, SurfaceFields], outdir: Path) -> None:
@@ -1294,8 +1298,11 @@ def main() -> None:
     print(f"Using ROM/preprocessing center files from: {args.preproc_dir}")
     print(f"Using ROM trajectory files from: {args.data_dir}")
     tr = np.load(Path(args.data_dir) / "Tr.npy")
+    # Keep the full train+predict rollout so plots/metrics span the forecast,
+    # not just the training window.
+    n_rollout_steps = (args.n_year_train + args.n_year_predict) * int(360 / args.n_days)
     q_roms = {
-        scenario.label: np.load(Path(args.data_dir) / scenario.rom_file)[:, : args.n_year_train * int(360 / args.n_days)]
+        scenario.label: np.load(Path(args.data_dir) / scenario.rom_file)[:, :n_rollout_steps]
         for scenario in scenarios
     }
 

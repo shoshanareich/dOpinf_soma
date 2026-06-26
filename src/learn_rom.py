@@ -148,8 +148,18 @@ def fit_and_score_model(
     t,
     weights=None,
     regularization_target=None,
+    stability_inputs=None,
+    stability_niters=None,
+    stability_bound=np.inf,
 ):
-    """Fit ROM with given regularization and return (converged, error)."""
+    """Fit ROM with given regularization and return (converged, error).
+
+    If ``stability_inputs`` is given, each candidate is also rolled out over the
+    full ``stability_niters``-step horizon (one rollout per input series, started
+    from the first training IC). Candidates that go non-finite or exceed
+    ``stability_bound`` anywhere in that horizon are rejected (converged=False),
+    so only operators stable across the entire prediction window are selectable.
+    """
 
     if reg_A > reg_H:
         return False, np.inf
@@ -179,10 +189,20 @@ def fit_and_score_model(
 
         if np.isnan(Q_ROM_).any():
             return False, np.inf
-    
+
        # err = weighted_lp_error(Q_true, Q_ROM_, weights=weights, normalize=True)
         err = weighted_lp_error(Qs_[i], Q_ROM_, weights=weights, normalize=True)
         scenario_errors.append(la.norm(err))
+
+    # Full-horizon stability gate: reject operators that blow up over the entire
+    # prediction window, not just the training window.
+    if stability_inputs is not None and stability_niters:
+        q0 = Qs_[0][:, 0]
+        for u_full in stability_inputs:
+            Q_full = model.predict(q0, niters=stability_niters, inputs=u_full)
+            if not np.all(np.isfinite(Q_full)) or np.max(np.abs(Q_full)) > stability_bound:
+                return False, np.inf
+
     return True, max(scenario_errors)
 
 
@@ -203,6 +223,9 @@ class TikhonovSweep:
         weights_H,
         norm_weights=None,
         regularization_target=None,
+        stability_inputs=None,
+        stability_niters=None,
+        stability_bound=np.inf,
     ):
         self.Qs_ = Qs_
         self.inputs = inputs
@@ -215,6 +238,9 @@ class TikhonovSweep:
         self.weights_A = weights_A
         self.weights_H = weights_H
         self.regularization_target = regularization_target
+        self.stability_inputs = stability_inputs
+        self.stability_niters = stability_niters
+        self.stability_bound = stability_bound
         #self.norm_weights = norm_weights
         if norm_weights is None:
             self.norm_weights = np.ones(r)
@@ -248,6 +274,9 @@ class TikhonovSweep:
                     t=self.t,
                     weights=self.norm_weights,
                     regularization_target=self.regularization_target,
+                    stability_inputs=self.stability_inputs,
+                    stability_niters=self.stability_niters,
+                    stability_bound=self.stability_bound,
                 )
 
                 self.converged[i, j] = converged
@@ -294,6 +323,9 @@ class TikhonovSweep:
                     t=self.t,
                     weights=self.norm_weights,
                     regularization_target=self.regularization_target,
+                    stability_inputs=self.stability_inputs,
+                    stability_niters=self.stability_niters,
+                    stability_bound=self.stability_bound,
                 )
                 failure = None
             except Exception as exc:
@@ -382,6 +414,13 @@ class TikhonovSweep:
         across ALL training scenarios and return the trained model object.
         """
         if self.best_reg_A is None:
+            if self.stability_inputs is not None:
+                raise RuntimeError(
+                    "No regularization candidate was stable over the full "
+                    f"{self.stability_niters}-step horizon (stability_bound="
+                    f"{self.stability_bound:g}). Widen weights_H upward, raise "
+                    "stability_bound, or shorten n_year_predict."
+                )
             raise RuntimeError("run() or load() must be called first.")
 
         rom = _make_model(

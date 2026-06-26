@@ -403,9 +403,28 @@ if rank == 0:
     ]
                                 
 
-    ## slice concatenated Qhat into a list 
+    ## slice concatenated Qhat into a list
     num_scenarios = svd.Qhat_global.shape[1] // nt
     states_list = [svd.Qhat_global[:, i*nt : (i+1)*nt] for i in range(num_scenarios)]
+
+    # Full-horizon stability gate (OPT-IN via config 'enforce_full_horizon_stability').
+    # When enabled, the selected operator must stay bounded over the entire
+    # train+predict window for every scenario we roll out (train + test taus), not just
+    # the training window; candidates that blow up are rejected in the Tikhonov sweep.
+    # Left OFF for the overdamping study (taus_2_4 etc.), which deliberately explores
+    # marginally-stable/vibrant operators and must NOT auto-reject them.
+    if bool(config.get('enforce_full_horizon_stability', False)):
+        niters_predict = int((n_year_train + n_year_predict) * 360 / n_days)
+        stability_inputs = [
+            build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
+            for tau in (tau_train + tau_test)
+        ]
+        stability_bound_factor = float(config.get('stability_bound_factor', 10.0))
+        stability_bound = stability_bound_factor * float(np.abs(svd.Qhat_global).max())
+    else:
+        niters_predict = None
+        stability_inputs = None
+        stability_bound = np.inf
 
     # learn ROM!
     n_train_H = 20
@@ -431,6 +450,9 @@ if rank == 0:
         "C": C,
         "weights_A": weights_A,
         "weights_H": weights_H,
+        "stability_inputs": stability_inputs,
+        "stability_niters": niters_predict,
+        "stability_bound": stability_bound,
     }
 else:
     rom_learning_start = None
@@ -442,6 +464,9 @@ B = rom_learning_payload["B"]
 C = rom_learning_payload["C"]
 weights_A = rom_learning_payload["weights_A"]
 weights_H = rom_learning_payload["weights_H"]
+stability_inputs = rom_learning_payload["stability_inputs"]
+stability_niters = rom_learning_payload["stability_niters"]
+stability_bound = rom_learning_payload["stability_bound"]
 
 if block_years is None:
     ## regularization parameter search 
@@ -456,6 +481,9 @@ if block_years is None:
         weights_A=weights_A,
         weights_H=weights_H,
         # norm_weights=abs(W_),
+        stability_inputs=stability_inputs,
+        stability_niters=stability_niters,
+        stability_bound=stability_bound,
     )
 
 
