@@ -85,6 +85,13 @@ center_opt = config['center_opt']
 scale = config['scale']
 dir_extension = config.get('dir_extension', 'default_extension')
 block_years = config.get('block_years')
+learn_N = bool(config.get('learn_N', False))  # option 1: bilinear state-input operator N(u⊗q)
+reg_N = config.get('reg_N')  # independent reg for N (None -> tied to reg_H; ~1e3 works)
+var_weight = float(config.get('var_weight', 0.0))  # option 2: variance-deficit penalty in the loss
+n_windows = int(config.get('n_windows', 0))        # option 3: # of short scoring windows (0 -> off)
+window_months = float(config.get('window_months', 3.0))  # option 3: window length in months
+window_seed = int(config.get('window_seed', 0))    # option 3: RNG seed for window starts
+run_label = config.get('run_label')  # optional suffix on the results dir to separate runs sharing center/r
 forcing_config = resolve_forcing_config(config)
 train_taus = forcing_config['train_taus']
 test_taus = forcing_config['test_taus']
@@ -318,7 +325,8 @@ if rank == 0:
 results_dir = None
 # Create the results directory
 if rank == 0:
-    results_dir = root_dir + 'save_roms/' + dir_extension + '/' +f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}/'
+    run_suffix = f'_{run_label}' if run_label else ''
+    results_dir = root_dir + 'save_roms/' + dir_extension + '/' +f'{center_opt}_{scale}_{n_days}days_{n_year_train}yrs_r{svd.r}{run_suffix}/'
     os.makedirs(results_dir, exist_ok=True)
     print(f"Results directory created: {results_dir}", flush=True)
     
@@ -426,6 +434,21 @@ if rank == 0:
         stability_inputs = None
         stability_bound = np.inf
 
+    # Option 3: short-window scoring. Pick n_windows random windows once (seeded,
+    # shared across every candidate so the comparison is fair) and score on their
+    # mean error instead of the whole trajectory. Off when n_windows == 0.
+    if n_windows > 0:
+        window_len = int(round(window_months * 30 / n_days))
+        max_start = nt - window_len
+        if max_start < 1:
+            raise ValueError(f"window_len {window_len} >= nt {nt}; reduce window_months")
+        rng = np.random.default_rng(window_seed)
+        window_starts = sorted(int(s) for s in rng.integers(0, max_start + 1, size=n_windows))
+        print(f"option 3: scoring on {n_windows} windows of {window_len} steps; starts={window_starts}", flush=True)
+    else:
+        window_len = None
+        window_starts = None
+
     # learn ROM!
     n_train_H = 20
     n_train_A = 21
@@ -453,6 +476,8 @@ if rank == 0:
         "stability_inputs": stability_inputs,
         "stability_niters": niters_predict,
         "stability_bound": stability_bound,
+        "window_starts": window_starts,
+        "window_len": window_len,
     }
 else:
     rom_learning_start = None
@@ -467,6 +492,8 @@ weights_H = rom_learning_payload["weights_H"]
 stability_inputs = rom_learning_payload["stability_inputs"]
 stability_niters = rom_learning_payload["stability_niters"]
 stability_bound = rom_learning_payload["stability_bound"]
+window_starts = rom_learning_payload["window_starts"]
+window_len = rom_learning_payload["window_len"]
 
 if block_years is None:
     ## regularization parameter search 
@@ -484,6 +511,11 @@ if block_years is None:
         stability_inputs=stability_inputs,
         stability_niters=stability_niters,
         stability_bound=stability_bound,
+        learn_N=learn_N,
+        reg_N=reg_N,
+        var_weight=var_weight,
+        window_starts=window_starts,
+        window_len=window_len,
     )
 
 

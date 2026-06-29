@@ -608,6 +608,26 @@ def load_lat_values(grid_dir: str, ny: int) -> np.ndarray:
     return np.linspace(15, 75, ny)
 
 
+def load_cell_area(grid_dir: str, ny: int, nx: int) -> np.ndarray | None:
+    """Tracer-point cell area rA (ny, nx) for area-weighted surface means.
+
+    Returns None if the grid can't be read, so callers fall back to an
+    unweighted mean.
+    """
+    try:
+        import xmitgcm
+
+        grid = xmitgcm.open_mdsdataset(grid_dir, iters=None)
+        if "rA" in grid:
+            area = np.asarray(grid["rA"].values)
+            if area.shape == (ny, nx):
+                return area
+            print(f"rA shape {area.shape} != ({ny}, {nx}); skipping area weighting.")
+    except Exception as exc:
+        print(f"Could not load MITgcm cell area rA from {grid_dir}: {exc}")
+    return None
+
+
 def assign_depth_coord(da: xr.DataArray, depth: np.ndarray) -> tuple[xr.DataArray, str]:
     depth_dim = next((dim for dim in ("Z", "k") if dim in da.dims), da.dims[1])
     if da.sizes[depth_dim] == depth.size:
@@ -752,6 +772,19 @@ def plot_timeseries_locations(
     savefig(fig, outdir / f"{var.lower()}_location_timeseries.png")
 
 
+def _spatial_mean(field: np.ndarray, area: np.ndarray | None) -> np.ndarray:
+    """Mean over space (axes 1,2) of a (time, ny, nx) field, ignoring land
+    (value==0) and non-finite cells. Area-weighted by `area` (ny, nx) when given."""
+    valid = np.isfinite(field) & (field != 0)
+    masked = np.where(valid, field, np.nan)
+    if area is None:
+        return np.nanmean(masked, axis=(1, 2))
+    w = np.where(valid, area[None, :, :], 0.0)
+    num = np.nansum(np.where(valid, field, 0.0) * w, axis=(1, 2))
+    den = np.sum(w, axis=(1, 2))
+    return num / np.where(den == 0, np.nan, den)
+
+
 def plot_spatial_mean_timeseries(
     fields_by_scenario: dict[str, SurfaceFields],
     var: str,
@@ -759,6 +792,7 @@ def plot_spatial_mean_timeseries(
     rom_attr: str,
     n_days: int,
     outdir: Path,
+    area: np.ndarray | None = None,
 ) -> None:
     fig, ax = plt.subplots(1, 1, figsize=(15, 5))
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -770,8 +804,8 @@ def plot_spatial_mean_timeseries(
         years = np.arange(nt) * n_days / 360.0
         color = colors[idx % len(colors)]
 
-        fom_mean = np.nanmean(np.where(fom[:nt] == 0, np.nan, fom[:nt]), axis=(1, 2))
-        rom_mean = np.nanmean(np.where(rom[:nt] == 0, np.nan, rom[:nt]), axis=(1, 2))
+        fom_mean = _spatial_mean(fom[:nt], area)
+        rom_mean = _spatial_mean(rom[:nt], area)
         ax.plot(years, fom_mean, label=f"MITgcm {label}", ls="--", color=color, lw=1.6)
         ax.plot(years, rom_mean, label=f"ROM {label}", color=color, lw=1.6)
 
@@ -1334,8 +1368,9 @@ def main() -> None:
     plot_relative_error_summary(fields_by_scenario, args.n_days, outdir)
     plot_variability_maps(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.nx, args.ny, outdir)
     plot_variability_maps(fields_by_scenario, "T", "sst_fom", "sst_rom", args.nx, args.ny, outdir)
+    cell_area = load_cell_area(args.grid_dir, args.ny, args.nx)
     plot_timeseries_locations(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.n_days, outdir)
-    plot_spatial_mean_timeseries(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.n_days, outdir)
+    plot_spatial_mean_timeseries(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.n_days, outdir, area=cell_area)
     plot_timeseries_locations(fields_by_scenario, "T", "sst_fom", "sst_rom", args.n_days, outdir)
     plot_monthly_snapshots(fields_by_scenario, args.month_idx, args.n_days, args.nx, args.ny, outdir)
 

@@ -6,6 +6,37 @@ import pickle
 from pathlib import Path
 
 
+def score_trajectory(Q_true, Q_ROM, *, weights=None, window_starts=None,
+                     window_len=None, var_weight=0.0):
+    """Scalar fidelity score for a single scenario rollout.
+
+    - Default: L2-over-time of the normalized spatial error (original behavior).
+    - window_starts (option 3): mean normalized-L2 over short windows instead of
+      the whole trajectory (rewards short-horizon fidelity over a mean-collapsed
+      long trajectory).
+    - var_weight > 0 (option 2): add a per-mode std-deficit penalty so a damped
+      (low-variance) rollout is penalized, not just a pointwise-wrong one.
+    """
+    if window_starts:
+        errs = [
+            la.norm(weighted_lp_error(
+                Q_true[:, s:s + window_len], Q_ROM[:, s:s + window_len],
+                weights=weights, normalize=True))
+            for s in window_starts
+        ]
+        score = float(np.mean(errs))
+    else:
+        score = float(la.norm(weighted_lp_error(Q_true, Q_ROM, weights=weights, normalize=True)))
+
+    if var_weight:
+        std_true = Q_true.std(axis=1)
+        std_rom = Q_ROM.std(axis=1)
+        deficit = np.maximum(0.0, 1.0 - std_rom / np.maximum(std_true, 1e-12))
+        score += var_weight * float(la.norm(deficit))
+
+    return score
+
+
 def weighted_lp_error(Q_true, Q_approx, weights=None, normalize=True):
     """
     Computes the weighted L2 error for spatial-temporal data.
@@ -81,25 +112,37 @@ class ShiftedTikhonovSolver(opinf.lstsq.TikhonovSolver):
         return residual + np.sum((self.regularizer @ diff) ** 2, axis=0)
 
 
-def _learned_operator_templates():
-    return [
+def _learned_operator_templates(learn_N=False):
+    ops = [
         opinf.operators.ConstantOperator(),
         opinf.operators.LinearOperator(),
         opinf.operators.QuadraticOperator(),
     ]
+    if learn_N:
+        # Bilinear state-input operator N(u (x) q): makes the internal dynamics
+        # depend on the forcing amplitude. Inferred (unlike imposed B).
+        ops.append(opinf.operators.StateInputOperator())
+    return ops
 
 
-def _make_regularizer(reg_A, reg_H, r):
+def _make_regularizer(reg_A, reg_H, r, *, learn_N=False, reg_N=None, m=None):
     reg_c = reg_A
+    params = [reg_c, reg_A, reg_H]
+    kwargs = dict(state_dimension=r)
+    if learn_N:
+        if m is None:
+            raise ValueError("input dimension m is required when learn_N=True")
+        params.append(reg_H if reg_N is None else reg_N)  # tie N to H by default
+        kwargs["input_dimension"] = m
     return opinf.lstsq.TikhonovSolver.get_operator_regularizer(
-        operators=_learned_operator_templates(),
-        regularization_parameters=[reg_c, reg_A, reg_H],
-        state_dimension=r,
+        operators=_learned_operator_templates(learn_N=learn_N),
+        regularization_parameters=params,
+        **kwargs,
     )
 
 
-def _make_solver(reg_A, reg_H, r, regularization_target=None):
-    regularizer = _make_regularizer(reg_A, reg_H, r)
+def _make_solver(reg_A, reg_H, r, regularization_target=None, *, learn_N=False, reg_N=None, m=None):
+    regularizer = _make_regularizer(reg_A, reg_H, r, learn_N=learn_N, reg_N=reg_N, m=m)
     if regularization_target is None:
         return opinf.lstsq.TikhonovSolver(regularizer, method="lstsq")
     return ShiftedTikhonovSolver(
@@ -109,7 +152,7 @@ def _make_solver(reg_A, reg_H, r, regularization_target=None):
     )
 
 
-def _make_model(B, C, solver):
+def _make_model(B, C, solver, *, learn_N=False):
     operators = [
         opinf.operators.InputOperator(entries=B),
         opinf.operators.ConstantOperator(entries=C),
@@ -117,6 +160,8 @@ def _make_model(B, C, solver):
         opinf.operators.LinearOperator(),
         opinf.operators.QuadraticOperator(),
     ]
+    if learn_N:
+        operators.append(opinf.operators.StateInputOperator())
     return opinf.ROM(model=opinf.models.DiscreteModel(operators, solver=solver))
 
 
@@ -151,6 +196,12 @@ def fit_and_score_model(
     stability_inputs=None,
     stability_niters=None,
     stability_bound=np.inf,
+    learn_N=False,
+    reg_N=None,
+    m=None,
+    var_weight=0.0,
+    window_starts=None,
+    window_len=None,
 ):
     """Fit ROM with given regularization and return (converged, error).
 
@@ -167,7 +218,8 @@ def fit_and_score_model(
     rom = _make_model(
         B,
         C,
-        solver=_make_solver(reg_A, reg_H, r, regularization_target),
+        solver=_make_solver(reg_A, reg_H, r, regularization_target, learn_N=learn_N, reg_N=reg_N, m=m),
+        learn_N=learn_N,
     )
     model = rom.fit(states=Qs_, inputs=inputs)
 
@@ -190,9 +242,10 @@ def fit_and_score_model(
         if np.isnan(Q_ROM_).any():
             return False, np.inf
 
-       # err = weighted_lp_error(Q_true, Q_ROM_, weights=weights, normalize=True)
-        err = weighted_lp_error(Qs_[i], Q_ROM_, weights=weights, normalize=True)
-        scenario_errors.append(la.norm(err))
+        scenario_errors.append(score_trajectory(
+            Qs_[i], Q_ROM_, weights=weights,
+            window_starts=window_starts, window_len=window_len, var_weight=var_weight,
+        ))
 
     # Full-horizon stability gate: reject operators that blow up over the entire
     # prediction window, not just the training window.
@@ -226,6 +279,11 @@ class TikhonovSweep:
         stability_inputs=None,
         stability_niters=None,
         stability_bound=np.inf,
+        learn_N=False,
+        reg_N=None,
+        var_weight=0.0,
+        window_starts=None,
+        window_len=None,
     ):
         self.Qs_ = Qs_
         self.inputs = inputs
@@ -234,6 +292,13 @@ class TikhonovSweep:
         self.r = r
         self.nt = nt
         self.t = t
+        self.learn_N = learn_N
+        self.reg_N = reg_N  # independent reg for N; None -> tied to reg_H (inert when reg_H large)
+        # input dimension m, needed to size the N regularizer (inputs: list of (m, nt))
+        self.m = int(np.asarray(inputs[0]).shape[0]) if learn_N else None
+        self.var_weight = var_weight          # option 2: variance-deficit penalty
+        self.window_starts = window_starts    # option 3: short-window scoring
+        self.window_len = window_len
 
         self.weights_A = weights_A
         self.weights_H = weights_H
@@ -277,6 +342,12 @@ class TikhonovSweep:
                     stability_inputs=self.stability_inputs,
                     stability_niters=self.stability_niters,
                     stability_bound=self.stability_bound,
+                    learn_N=self.learn_N,
+                    reg_N=self.reg_N,
+                    m=self.m,
+                    var_weight=self.var_weight,
+                    window_starts=self.window_starts,
+                    window_len=self.window_len,
                 )
 
                 self.converged[i, j] = converged
@@ -326,6 +397,12 @@ class TikhonovSweep:
                     stability_inputs=self.stability_inputs,
                     stability_niters=self.stability_niters,
                     stability_bound=self.stability_bound,
+                    learn_N=self.learn_N,
+                    reg_N=self.reg_N,
+                    m=self.m,
+                    var_weight=self.var_weight,
+                    window_starts=self.window_starts,
+                    window_len=self.window_len,
                 )
                 failure = None
             except Exception as exc:
@@ -431,7 +508,11 @@ class TikhonovSweep:
                 self.best_reg_H,
                 self.r,
                 self.regularization_target,
+                learn_N=self.learn_N,
+                reg_N=self.reg_N,
+                m=self.m,
             ),
+            learn_N=self.learn_N,
         )
         model = rom.fit(states=self.Qs_, inputs=self.inputs)
 
