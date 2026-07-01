@@ -55,6 +55,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-dir", required=True, help="Dir with Tr.npy, Qhat.npy")
     p.add_argument("--preproc-dir", required=True, help="Dir with *_transformed_surface.npy")
     p.add_argument("--grid-dir", default="/scratch/shoshi/soma4/grid/")
+    p.add_argument("--learn-N", action="store_true",
+                   help="Add the bilinear state-input operator N(u⊗q)")
+    p.add_argument("--reg-N", type=float, default=None,
+                   help="Fixed reg for N (default: tie to reg_H). Use a SMALL value so N "
+                        "isn't crushed by the large reg_H needed for H's stability.")
     p.add_argument("--reg-A", type=float, default=1e-6, help="Fixed reg_A (and reg_c) for the scan")
     p.add_argument("--reg-H", default=None,
                    help="Comma list of reg_H; default = coarse logspace(2,6) + fine grid near 1e4")
@@ -148,6 +153,10 @@ def main() -> None:
         fine = np.logspace(np.log10(7e3), np.log10(2.2e4), 11)
         reg_H_list = sorted(np.unique(np.round(np.concatenate([coarse, fine]))))
     reg_A = args.reg_A
+    learn_N = args.learn_N
+    reg_N_val = args.reg_N
+    m_in = int(np.asarray(inputs_train[0]).shape[0])  # input dim (m_in, not m: the
+    # scoring loop below uses `m` as a per-scenario dict, which would clobber it)
 
     print(f"r={r}, nt={nt}, scenarios={n_scen}, reg_A={reg_A:.1e}, "
           f"stability check = {args.stability_years} yr\n")
@@ -159,7 +168,7 @@ def main() -> None:
     rows = []
     for reg_H in reg_H_list:
         try:
-            model = _make_model(B, C, solver=_make_solver(reg_A, reg_H, r)).fit(
+            model = _make_model(B, C, solver=_make_solver(reg_A, reg_H, r, learn_N=learn_N, reg_N=reg_N_val, m=m_in), learn_N=learn_N).fit(
                 states=states_list, inputs=inputs_train)
         except Exception as exc:  # noqa: BLE001
             print(f"{reg_H:>11.3g}{'FIT-ERR':>8}  ({exc!r})")
@@ -232,7 +241,7 @@ def main() -> None:
         inputs_pred = make_inputs(Tmax, tau_train, pred_years, n_days)
         npred = pred_years * steps_per_year
 
-        model = _make_model(B, C, solver=_make_solver(reg_A, reg_H, r)).fit(
+        model = _make_model(B, C, solver=_make_solver(reg_A, reg_H, r, learn_N=learn_N, reg_N=reg_N_val, m=m_in), learn_N=learn_N).fit(
             states=states_list, inputs=inputs_train)
         for fn in ("Tr.npy", "Qhat.npy"):
             shutil.copy(data_dir / fn, save_dir / fn)
