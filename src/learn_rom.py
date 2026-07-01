@@ -112,6 +112,24 @@ class ShiftedTikhonovSolver(opinf.lstsq.TikhonovSolver):
         return residual + np.sum((self.regularizer @ diff) ** 2, axis=0)
 
 
+def _resolve_reg_N(reg_N, reg_A, reg_H):
+    """Resolve the N regularization for one candidate.
+
+    reg_N may be: None (-> tied to reg_H inside _make_regularizer), a number
+    (fixed), or the string 'A'/'H' to tie N to the candidate's reg_A/reg_H.
+    """
+    if reg_N is None:
+        return None
+    if isinstance(reg_N, str):
+        key = reg_N.strip().lower().lstrip("reg_")
+        if key == "a":
+            return reg_A
+        if key == "h":
+            return reg_H
+        raise ValueError(f"reg_N string must be 'A' or 'H', got {reg_N!r}")
+    return float(reg_N)
+
+
 def _learned_operator_templates(learn_N=False):
     ops = [
         opinf.operators.ConstantOperator(),
@@ -218,7 +236,8 @@ def fit_and_score_model(
     rom = _make_model(
         B,
         C,
-        solver=_make_solver(reg_A, reg_H, r, regularization_target, learn_N=learn_N, reg_N=reg_N, m=m),
+        solver=_make_solver(reg_A, reg_H, r, regularization_target, learn_N=learn_N,
+                            reg_N=_resolve_reg_N(reg_N, reg_A, reg_H), m=m),
         learn_N=learn_N,
     )
     model = rom.fit(states=Qs_, inputs=inputs)
@@ -509,7 +528,7 @@ class TikhonovSweep:
                 self.r,
                 self.regularization_target,
                 learn_N=self.learn_N,
-                reg_N=self.reg_N,
+                reg_N=_resolve_reg_N(self.reg_N, self.best_reg_A, self.best_reg_H),
                 m=self.m,
             ),
             learn_N=self.learn_N,

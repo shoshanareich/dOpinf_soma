@@ -141,19 +141,22 @@ def apply_config_defaults(args: argparse.Namespace) -> argparse.Namespace:
         args.training_dirs = list_to_csv(snapshot_dirs)
     if args.test_dir is None and test_dir:
         args.test_dir = test_dir
+    if args.test_dirs is None and test_dirs:
+        args.test_dirs = list_to_csv(test_dirs)
 
-    fom_dirs = snapshot_dirs + ([test_dir] if test_dir else [])
+    # Include ALL test scenarios, not just the first.
+    fom_dirs = snapshot_dirs + test_dirs
     if args.scenario_labels is None and fom_dirs:
         labels = config.get("scenario_labels") or [
-            scenario_label_from_dir(path, is_test=(idx == len(fom_dirs) - 1))
+            scenario_label_from_dir(path, is_test=(idx >= len(snapshot_dirs)))
             for idx, path in enumerate(fom_dirs)
         ]
         args.scenario_labels = list_to_csv(labels)
 
-    if args.rom_files is None and snapshot_dirs and test_dir:
+    if args.rom_files is None and snapshot_dirs and test_dirs:
         train_files = [f"Q_ROM_train_{scenario_name_from_dir(path)}.npy" for path in snapshot_dirs]
-        test_file = f"Q_ROM_test_{scenario_name_from_dir(test_dir)}.npy"
-        args.rom_files = list_to_csv(train_files + [test_file])
+        test_files = [f"Q_ROM_test_{scenario_name_from_dir(p)}.npy" for p in test_dirs]
+        args.rom_files = list_to_csv(train_files + test_files)
 
     if args.preproc_dir is None and config.get("dir_extension"):
         args.preproc_dir = str(Path(args.root_dir) / "save_roms" / config["dir_extension"])
@@ -817,6 +820,45 @@ def plot_spatial_mean_timeseries(
     savefig(fig, outdir / f"{var.lower()}_spatial_mean_timeseries.png")
 
 
+def _rolling_mean(x: np.ndarray, w: int) -> np.ndarray:
+    """Uniform rolling mean along a 1D series; returns length len(x)-w+1."""
+    if w <= 1:
+        return x
+    c = np.cumsum(np.insert(x, 0, 0.0))
+    return (c[w:] - c[:-w]) / w
+
+
+def plot_ssh_rolling_mean(
+    fields_by_scenario: dict[str, SurfaceFields],
+    n_days: int,
+    outdir: Path,
+    area: np.ndarray | None = None,
+    window_days: int = 30,
+) -> None:
+    """Area-weighted domain-mean SSH with a `window_days` rolling mean, all scenarios."""
+    w = max(1, int(round(window_days / n_days)))
+    fig, ax = plt.subplots(1, 1, figsize=(15, 5))
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for idx, (label, fields) in enumerate(fields_by_scenario.items()):
+        fom = np.asarray(fields.ssh_fom, dtype=float)
+        rom = np.asarray(fields.ssh_rom, dtype=float)
+        nt = min(fom.shape[0], rom.shape[0])
+        fom_m = _spatial_mean(fom[:nt], area)
+        rom_m = _spatial_mean(rom[:nt], area)
+        fom_r = _rolling_mean(fom_m, w)
+        rom_r = _rolling_mean(rom_m, w)
+        years = (np.arange(len(fom_r)) + w // 2) * n_days / 360.0
+        color = colors[idx % len(colors)]
+        ax.plot(years, fom_r, ls="--", color=color, lw=1.6, label=f"MITgcm {label}")
+        ax.plot(years, rom_r, ls="-", color=color, lw=1.6, label=f"ROM {label}")
+    ax.set_title(f"Area-weighted mean SSH ({window_days}-day rolling mean)", fontsize=16)
+    ax.set_xlabel("Year", fontsize=12)
+    ax.set_ylabel(VAR_META["Eta"]["label"], fontsize=12)
+    ax.grid(True, alpha=0.3)
+    ax.legend(ncol=2, fontsize=9)
+    savefig(fig, outdir / f"ssh_mean_rolling{window_days}_timeseries.png")
+
+
 def plot_monthly_snapshots(
     fields_by_scenario: dict[str, SurfaceFields],
     month_idx: int,
@@ -1262,6 +1304,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
     )
     parser.add_argument("--test-dir", default=None)
+    parser.add_argument("--test-dirs", default=None, help="comma-separated test dirs (all test scenarios)")
     parser.add_argument("--scenario-labels", default=None)
     parser.add_argument("--rom-files", default=None)
     parser.add_argument("--n-year-train", type=int, default=None)
@@ -1317,7 +1360,8 @@ def main() -> None:
     training_dirs = split_csv(args.training_dirs)
     labels = split_csv(args.scenario_labels)
     rom_files = split_csv(args.rom_files)
-    fom_dirs = training_dirs + [args.test_dir]
+    test_dirs = split_csv(args.test_dirs) if args.test_dirs else ([args.test_dir] if args.test_dir else [])
+    fom_dirs = training_dirs + test_dirs
     if len(labels) != len(rom_files) or len(labels) != len(fom_dirs):
         raise ValueError(
             "Expected equal counts for scenario labels, ROM files, and FOM directories "
@@ -1371,6 +1415,7 @@ def main() -> None:
     cell_area = load_cell_area(args.grid_dir, args.ny, args.nx)
     plot_timeseries_locations(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.n_days, outdir)
     plot_spatial_mean_timeseries(fields_by_scenario, "Eta", "ssh_fom", "ssh_rom", args.n_days, outdir, area=cell_area)
+    plot_ssh_rolling_mean(fields_by_scenario, args.n_days, outdir, area=cell_area, window_days=30)
     plot_timeseries_locations(fields_by_scenario, "T", "sst_fom", "sst_rom", args.n_days, outdir)
     plot_monthly_snapshots(fields_by_scenario, args.month_idx, args.n_days, args.nx, args.ny, outdir)
 

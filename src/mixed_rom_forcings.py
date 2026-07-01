@@ -522,6 +522,18 @@ if block_years is None:
     # grid search for best regularization parameters
     reg_A, reg_H, best_err = sweep.run_mpi(comm)
 
+    # No candidate converged (every rollout blew up / was rejected). Fail fast on
+    # ALL ranks -- otherwise rank 0 raises in fit_best_model while the others sit
+    # in a collective and the job deadlocks.
+    if reg_A is None:
+        if rank == 0:
+            print("ERROR: Tikhonov sweep found no valid (finite) model for any reg "
+                  "combination -- every candidate blew up over the training window. "
+                  "Regularize more (raise reg_N, e.g. reg_N='H' or a larger fixed "
+                  "value; or raise weights_H).", flush=True)
+        comm.Barrier()
+        sys.exit(1)
+
     if rank == 0:
         print("Best:", best_err, reg_A, reg_H)
 

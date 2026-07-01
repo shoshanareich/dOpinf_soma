@@ -37,6 +37,10 @@ CONFIGS=(
     "$cfg_dir/config_varloss_mean.json"
     "$cfg_dir/config_windows_IC.json"
     "$cfg_dir/config_windows_mean.json"
+    "$cfg_dir/config_varloss5_IC.json"
+    "$cfg_dir/config_varloss5_mean.json"
+    "$cfg_dir/config_baseline_r120_mean.json"
+    "$root_dir/configs_forcings/taus_2_4_equilibrium/config_baseline_mean.json"
 )
 CONFIG_FILE="${CONFIGS[$SLURM_ARRAY_TASK_ID]}"
 if [ -z "$CONFIG_FILE" ] || [ ! -f "$CONFIG_FILE" ]; then
