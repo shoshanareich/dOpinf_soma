@@ -23,7 +23,9 @@ export UCX_MEMTYPE_CACHE="${UCX_MEMTYPE_CACHE:-n}"
 export UCX_TLS="${UCX_TLS:-rc,sm,self}"
 
 root_dir=/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/
-CONFIG_FILE="$root_dir/configs_forcings/config_one_forcing.json"
+# Optional config path override: pass as first arg (sbatch run_roms.sh <config>),
+# else honor $ROM_CONFIG_FILE, else fall back to the default single-forcing config.
+CONFIG_FILE="${1:-${ROM_CONFIG_FILE:-$root_dir/configs_forcings/config_one_forcing.json}}"
 # Bare results root; the driver appends save_roms/<dir_extension>/... and the
 # evaluator rebuilds the preproc dir from it (passing it doubled is the known bug).
 scratch_root_dir=/scratch2/shoshi/soma4/dOpInf_results/

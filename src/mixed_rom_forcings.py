@@ -52,8 +52,9 @@ if MPI.COMM_WORLD.Get_rank() == 0:
     log_timing("Library imports finished; setting vars", script_start)
 
 
-#root_dir = '/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/' 
-root_dir = '/scratch2/shoshi/soma4/dOpInf_results/'
+#root_dir = '/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/'
+# Override with ROM_ROOT_DIR (e.g. when /scratch2 is down, point at /scratch).
+root_dir = os.environ.get('ROM_ROOT_DIR', '/scratch2/shoshi/soma4/dOpInf_results/')
 
 ## spatial vars
 nx = 248
@@ -409,7 +410,38 @@ if rank == 0:
         build_rom_inputs(Tmax, tau, n_year_train, n_days)
         for tau in tau_train
     ]
-                                
+
+    ## Standardize the ROM inputs when learning the bilinear N(u(x)q) operator.
+    ## N's data columns are u_k * q_i, so a single scalar reg_N is only meaningful
+    ## if the input channels share a common O(1) scale -- otherwise the large SST
+    ## channel (Tmax ~ 27) swamps the small wind channel (tau4 ~ 0.2) and N's wind
+    ## sensitivity is regularized to ~0. Centering also removes the mean-input part
+    ## of N, which is collinear with A (so A carries the mean dynamics and N carries
+    ## the forcing-fluctuation-dependent dynamics). The imposed B/C are
+    ## reparameterized EXACTLY, leaving the physical forcing pathway unchanged:
+    ##   B u + C == (B diag(sigma)) u~ + (C + B ubar),   u~ = (u - ubar) / sigma
+    ## With learn_N=False this is an identity (ubar=0, sigma=1): behavior is
+    ## bit-identical to before.
+    if learn_N:
+        all_train_inputs = np.hstack(inputs_list)          # (m, num_scenarios*nt)
+        input_mean = all_train_inputs.mean(axis=1)          # (m,) grand mean per channel
+        input_scale = all_train_inputs.std(axis=1)          # (m,) equalizes N-block col energy
+        input_scale[input_scale == 0.0] = 1.0               # guard flat channels (e.g. tau0.1)
+    else:
+        m_in = inputs_list[0].shape[0]
+        input_mean = np.zeros(m_in)
+        input_scale = np.ones(m_in)
+
+    def standardize_inputs(u):
+        return (np.asarray(u, dtype=float) - input_mean[:, None]) / input_scale[:, None]
+
+    C = C + B @ input_mean            # fold mean forcing into the imposed constant
+    B = B * input_scale[None, :]      # scale imposed B columns to match standardized inputs
+    inputs_list = [standardize_inputs(u) for u in inputs_list]
+
+    np.save(results_dir + 'input_mean.npy', input_mean)
+    np.save(results_dir + 'input_scale.npy', input_scale)
+
 
     ## slice concatenated Qhat into a list
     num_scenarios = svd.Qhat_global.shape[1] // nt
@@ -424,7 +456,7 @@ if rank == 0:
     if bool(config.get('enforce_full_horizon_stability', False)):
         niters_predict = int((n_year_train + n_year_predict) * 360 / n_days)
         stability_inputs = [
-            build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
+            standardize_inputs(build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days))
             for tau in (tau_train + tau_test)
         ]
         stability_bound_factor = float(config.get('stability_bound_factor', 10.0))
@@ -533,7 +565,7 @@ if block_years is None:
                   "value; or raise weights_H).", flush=True)
         comm.Barrier()
         sys.exit(1)
-
+        
     if rank == 0:
         print("Best:", best_err, reg_A, reg_H)
 
@@ -575,7 +607,7 @@ if rank == 0:
 
     # predict for all training scenarios
     inputs_list_predict = [
-        build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
+        standardize_inputs(build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days))
         for tau in tau_train
     ]
     
@@ -597,7 +629,7 @@ if rank == 0:
 
     # predict for unseen cases
     for test_label, tau in zip(test_labels, tau_test):
-        inputs_new = build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days)
+        inputs_new = standardize_inputs(build_rom_inputs(Tmax, tau, n_year_train + n_year_predict, n_days))
 
         ## using projected q0 
         # OR can use Q0 from training scenario, looking at how well we can drift ##

@@ -214,6 +214,9 @@ def fit_and_score_model(
     stability_inputs=None,
     stability_niters=None,
     stability_bound=np.inf,
+    stability_norm_bound=np.inf,
+    stability_steps_per_year=None,
+    stability_rho_max=np.inf,
     learn_N=False,
     reg_N=None,
     m=None,
@@ -228,6 +231,11 @@ def fit_and_score_model(
     from the first training IC). Candidates that go non-finite or exceed
     ``stability_bound`` anywhere in that horizon are rejected (converged=False),
     so only operators stable across the entire prediction window are selectable.
+    ``stability_norm_bound`` additionally rejects a rollout whose yearly-mean ||q||
+    (years of ``stability_steps_per_year`` steps) exceeds it in any year: unlike the
+    max|q| bound, this catches slow drift that stays below the year-1 transient.
+    ``stability_rho_max`` rejects candidates whose linear operator A has spectral
+    radius above it (checked before any rollout).
     """
 
     if reg_A > reg_H:
@@ -241,6 +249,12 @@ def fit_and_score_model(
         learn_N=learn_N,
     )
     model = rom.fit(states=Qs_, inputs=inputs)
+
+    if np.isfinite(stability_rho_max):
+        A = next(op.entries for op in model.model.operators
+                 if isinstance(op, opinf.operators.LinearOperator))
+        if np.abs(np.linalg.eigvals(A)).max() > stability_rho_max:
+            return False, np.inf
 
 
    # # slice the big matrix to check how it performs on each scenario
@@ -274,6 +288,12 @@ def fit_and_score_model(
             Q_full = model.predict(q0, niters=stability_niters, inputs=u_full)
             if not np.all(np.isfinite(Q_full)) or np.max(np.abs(Q_full)) > stability_bound:
                 return False, np.inf
+            if np.isfinite(stability_norm_bound):
+                norms = np.linalg.norm(Q_full, axis=0)
+                n_yr = norms.size // stability_steps_per_year
+                yearly = norms[:n_yr * stability_steps_per_year].reshape(n_yr, -1).mean(axis=1)
+                if yearly.max() > stability_norm_bound:
+                    return False, np.inf
 
     return True, max(scenario_errors)
 
@@ -298,6 +318,9 @@ class TikhonovSweep:
         stability_inputs=None,
         stability_niters=None,
         stability_bound=np.inf,
+        stability_norm_bound=np.inf,
+        stability_steps_per_year=None,
+        stability_rho_max=np.inf,
         learn_N=False,
         reg_N=None,
         var_weight=0.0,
@@ -325,6 +348,9 @@ class TikhonovSweep:
         self.stability_inputs = stability_inputs
         self.stability_niters = stability_niters
         self.stability_bound = stability_bound
+        self.stability_norm_bound = stability_norm_bound
+        self.stability_steps_per_year = stability_steps_per_year
+        self.stability_rho_max = stability_rho_max
         #self.norm_weights = norm_weights
         if norm_weights is None:
             self.norm_weights = np.ones(r)
@@ -361,6 +387,9 @@ class TikhonovSweep:
                     stability_inputs=self.stability_inputs,
                     stability_niters=self.stability_niters,
                     stability_bound=self.stability_bound,
+                    stability_norm_bound=self.stability_norm_bound,
+                    stability_steps_per_year=self.stability_steps_per_year,
+                    stability_rho_max=self.stability_rho_max,
                     learn_N=self.learn_N,
                     reg_N=self.reg_N,
                     m=self.m,
@@ -416,6 +445,9 @@ class TikhonovSweep:
                     stability_inputs=self.stability_inputs,
                     stability_niters=self.stability_niters,
                     stability_bound=self.stability_bound,
+                    stability_norm_bound=self.stability_norm_bound,
+                    stability_steps_per_year=self.stability_steps_per_year,
+                    stability_rho_max=self.stability_rho_max,
                     learn_N=self.learn_N,
                     reg_N=self.reg_N,
                     m=self.m,
@@ -514,7 +546,8 @@ class TikhonovSweep:
                 raise RuntimeError(
                     "No regularization candidate was stable over the full "
                     f"{self.stability_niters}-step horizon (stability_bound="
-                    f"{self.stability_bound:g}). Widen weights_H upward, raise "
+                    f"{self.stability_bound:g}, yearly-mean norm bound "
+                    f"{self.stability_norm_bound:g}, rho(A) max {self.stability_rho_max:g}). Widen weights_H upward, raise "
                     "stability_bound, or shorten n_year_predict."
                 )
             raise RuntimeError("run() or load() must be called first.")
