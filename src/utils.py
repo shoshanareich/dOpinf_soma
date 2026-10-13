@@ -8,8 +8,8 @@ import shutil
 import gc
 import time
 import sys
-sys.path.append('/home/shoshi/MITgcm_obsfit/MITgcm/utils/python/MITgcmutils/')
 from MITgcmutils import rdmds
+import paths
 
 def slice_space(n, rank, size):
     '''slice along space for this rank'''
@@ -447,7 +447,7 @@ def load_var_fom_lon(snapshot_dir, var, n_year_train, n_year_predict, n_days, ro
     return var_FOM, var_FOM_3d
 
 
-def read_grid(comm, grid_path='/scratch/shoshi/soma4/grid/'):
+def read_grid(comm, grid_path=paths.GRID_DIR):
     """
     Reads MITgcm grid files on Rank 0 and broadcasts the 
     essential arrays to all other ranks to avoid I/O overhead.

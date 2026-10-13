@@ -1,0 +1,25 @@
+# Environment used for the paper runs (conda env "opinf_mixed").
+# Versions are the ones the paper results were produced with.
+# mpi4py is built against the system MPI on the cluster (Intel MPI 2021.9);
+# on another machine install it against your local MPI.
+name: opinf_mixed
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=2.3.2
+  - scipy=1.16.1
+  - xarray=2025.8.0
+  - dask=2025.7.0
+  - netcdf4=1.7.2
+  - h5netcdf=1.6.4
+  - h5py=3.14.0
+  - zarr=3.1.5
+  - matplotlib=3.10.5
+  - cmocean=4.0.3
+  - xmitgcm=0.5.2
+  - mpi4py=4.1.0
+  - pip
+  - pip:
+      - opinf==0.5.16
+      - MITgcmutils==0.2.1

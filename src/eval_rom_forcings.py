@@ -29,6 +29,7 @@ import xarray as xr
 
 import cmocean.cm as cmo
 from config_utils import ensure_slash, resolve_forcing_config
+import paths
 
 
 VAR_META = {
@@ -1296,7 +1297,7 @@ def load_surface_fields(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=None, help="ROM training JSON file to use for evaluator defaults")
-    parser.add_argument("--root-dir", default="/scratch2/shoshi/soma4/dOpInf_results/")
+    parser.add_argument("--root-dir", default=paths.RESULTS_ROOT)
     parser.add_argument("--data-dir", default=None, help="Directory containing Tr.npy and Q_ROM*.npy")
     parser.add_argument("--preproc-dir", default=None, help="Directory containing center*.nc files")
     parser.add_argument(
@@ -1318,7 +1319,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ny", type=int, default=248)
     parser.add_argument("--nz", type=int, default=31)
     parser.add_argument("--vertical-i", type=int, default=124)
-    parser.add_argument("--grid-dir", default="/scratch/shoshi/soma4/grid/")
+    parser.add_argument("--grid-dir", default=paths.GRID_DIR)
     parser.add_argument("--month-idx", type=int, default=12, help="Zero-based monthly mean index to plot")
     parser.add_argument("--outdir", default=None)
     parser.add_argument("--skip-field-save", action="store_true", help="Skip full surface_fields_*.nc dumps")
@@ -1342,9 +1343,9 @@ def main() -> None:
     args.r = args.r or infer_r_from_tr(args.data_dir) or 26
     args.training_dirs = (
         args.training_dirs
-        or "/scratch/shoshi/soma4/run_20yrs_tau0.1/,/scratch/shoshi/soma4/run_20yrs_cdscheme/training_snapshots/"
+        or f"{paths.DATA_ROOT}run_20yrs_tau0.1/,{paths.DATA_ROOT}run_20yrs_cdscheme/training_snapshots/"
     )
-    args.test_dir = args.test_dir or "/scratch/shoshi/soma4/run_20yrs_tau0.3/"
+    args.test_dir = args.test_dir or paths.DATA_ROOT + "run_20yrs_tau0.3/"
     args.scenario_labels = args.scenario_labels or "tau0.1,tau0.4,tau0.3-test"
     args.rom_files = args.rom_files or "Q_ROM_train_scenario_0.npy,Q_ROM_train_scenario_1.npy,Q_ROM_test3.npy"
 

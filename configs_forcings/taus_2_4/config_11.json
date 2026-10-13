@@ -1,0 +1,22 @@
+{
+    "n_year_predict": 0,
+    "n_days": 1,
+    "scale": "var",
+    "train_taus": [
+        0.2,
+        0.4
+    ],
+    "test_taus": [
+        0.3,
+        0.1,
+        0.5
+    ],
+    "svd_dense_block_gb": 1.0,
+    "svd_gram_chunk_rows": 8192,
+    "n_year_train": 10,
+    "center_opt": "mean",
+    "r": 105,
+    "dir_extension": "taus_2_4_sameIC",
+    "snapshot_dir_prefix": "/scratch/shoshi/soma4/run_10yrspinup_tau",
+    "description": "taus_2_4_sameIC: train 0.2&0.4, test 0.3/0.1/0.5, 10yr, mean, r105, n_days=1"
+}

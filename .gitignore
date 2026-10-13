@@ -19,3 +19,57 @@ run_roms_forcings62.sh
 src/__pycache__/
 *.pyc
 src/.results_path_local*
+
+# ---- Paper pipeline (curated whitelist) -------------------------------------
+# analysis/ and job_scripts/ stay ignored except for the scripts that produce the
+# paper's ROM, figures and numbers. Add a line here to publish another script.
+!README.md
+!environment.yml
+
+!analysis/
+analysis/*
+# conservation-constrained refit (the paper ROM) + heat/salt budgets
+!analysis/refit_conservation.py
+!analysis/rom_heat_budget.py
+!analysis/fom_heat_budget.py
+!analysis/fom_salt_budget.py
+!analysis/heat_budget_depth.py
+!analysis/salt_volume_budget.py
+!analysis/plot_conservation_figs.py
+# field exports / derived quantities
+!analysis/compute_psi_scenario.py
+!analysis/compute_moc.py
+!analysis/export_surface_fields.py
+!analysis/export_vertical_fields.py
+!analysis/export_3d_fields.py
+!analysis/export_proj_surface.py
+# figures
+!analysis/plot_gyre_extremes.py
+!analysis/plot_moc_figure.py
+!analysis/plot_vertical_climatology.py
+!analysis/plot_snapshots_timeseries.py
+!analysis/plot_surface_snapshots.py
+!analysis/plot_psi_wind_panels.py
+!analysis/plot_pod_spectrum.py
+!analysis/plot_compute_cost.py
+!analysis/plot_longterm_stability.py
+!analysis/eke_vs_tau.py
+# error metrics (tables)
+!analysis/surface_error_metrics.py
+!analysis/volume_error_metrics.py
+!analysis/depth_avg_error_metrics.py
+
+!job_scripts/
+job_scripts/*
+!job_scripts/run_conserve_norm10.sh
+!job_scripts/run_unconstrained_norm10.sh
+!job_scripts/run_paperfigs_physscale_stab.sh
+!job_scripts/run_budget_figs_v2.sh
+!job_scripts/run_eke_norm10.sh
+
+# config of the base r=105 run (trained by run_roms_taus24.sh, index 11)
+!configs_forcings/
+configs_forcings/*
+!configs_forcings/taus_2_4/
+configs_forcings/taus_2_4/*
+!configs_forcings/taus_2_4/config_11.json

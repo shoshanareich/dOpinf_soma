@@ -7,6 +7,7 @@ from mpi4py import MPI
 import sys
 import time
 from datetime import datetime
+import paths
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -33,7 +34,6 @@ import netCDF4 as nc
 import xmitgcm 
 import json
 import sys
-sys.path.append('/home/shoshi/MITgcm_obsfit/MITgcm/utils/python/MITgcmutils/')
 from MITgcmutils import rdmds
 
 from config_utils import resolve_forcing_config
@@ -54,7 +54,7 @@ if MPI.COMM_WORLD.Get_rank() == 0:
 
 #root_dir = '/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma/'
 # Override with ROM_ROOT_DIR (e.g. when /scratch2 is down, point at /scratch).
-root_dir = os.environ.get('ROM_ROOT_DIR', '/scratch2/shoshi/soma4/dOpInf_results/')
+root_dir = os.environ.get('ROM_ROOT_DIR', paths.RESULTS_ROOT)
 
 ## spatial vars
 nx = 248
@@ -368,7 +368,7 @@ if rank == 0:
     forcings_start = time.perf_counter()
 
     F = OceanForcing(
-        grid_dir='/scratch/shoshi/soma4/grid/',
+        grid_dir=paths.GRID_DIR,
         nx=nx, ny=ny,
         xo=0, yo=14,
         xc=31, yc=45,
@@ -645,7 +645,7 @@ comm.Barrier()
 #if rank ==0:
  #   print('read grid')
 
-grid = read_grid(comm, '/scratch/shoshi/soma4/grid/')
+grid = read_grid(comm, paths.GRID_DIR)
 
 if rank ==0:
     streamfunction_total_start = time.perf_counter()

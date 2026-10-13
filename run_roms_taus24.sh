@@ -22,8 +22,8 @@ export HDF5_USE_FILE_LOCKING="${HDF5_USE_FILE_LOCKING:-FALSE}"
 export UCX_MEMTYPE_CACHE="${UCX_MEMTYPE_CACHE:-n}"
 export UCX_TLS="${UCX_TLS:-rc,sm,self}"
 
-root_dir=/home/shoshi/jupyter_notebooks/OpInf/dOpinf_soma
-scratch_base=/scratch2/shoshi/soma4/dOpInf_results
+root_dir=${SLURM_SUBMIT_DIR:-$PWD}  # submit from the repo root
+scratch_base=${SOMA_RESULTS_ROOT:-/scratch2/shoshi/soma4/dOpInf_results}
 config_dir="$root_dir/configs_forcings/taus_2_4"
 
 GROUP=${SLURM_ARRAY_TASK_ID:-0}
