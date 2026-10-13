@@ -1,20 +1,20 @@
 # dOpInf SOMA ocean emulator
 
 Code for *Data-Driven Ocean Emulation: Using Operator Inference to Emulate a Double Gyre
-Ocean System* (TODO: authors, journal, DOI).
+Ocean System*.
 
 We learn a reduced-order model (ROM) of a 1/4° MITgcm double-gyre ocean (SOMA; Wolfram
 et al. 2015) with distributed Operator Inference (dOpInf; Farcas et al. 2025). The model is
 a discrete quadratic system with inputs,
 
 ```
-q_{k+1} = c + A q_k + H (q_k ⊗ q_k) + B u_k + C,      u_k = [Tmax(t), tau(t)]
+q_{k+1} = c + A q_k + H (q_k ⊗ q_k) + B y_k + C,      y_k = [Tmax(t), tau(t)]
 ```
 
 where `q` is the POD-reduced state of the full 3D ocean (U, V, SSH, T, S). The forcing
 operators `B` and `C` are not learned: they are exact projections of the known surface
 wind-stress, temperature- and salinity-restoring fields. The internal dynamics `c`, `A`, `H`
-are learned by Tikhonov-regularized least squares. In the paper ROM, two rows of
+are learned by Tikhonov-regularized least squares.  Two rows of
 `[c A H]` are additionally constrained so that the ROM conserves heat and salt exactly.
 
 ## Repository layout
@@ -74,7 +74,7 @@ with `--fix none --suffix unconstrained_norm10`.
 
 ### Figures
 
-Set `B` to the base run and `R` to the paper ROM:
+Set `B` to the unconstrained run and `R` to the contrained ROM:
 
 ```bash
 B=$SOMA_RESULTS_ROOT/save_roms/taus_2_4_sameIC/mean_var_1days_10yrs_r105
@@ -141,10 +141,3 @@ python analysis/volume_error_metrics.py    --data-dir $R/ --scenario run_10yrspi
 python analysis/depth_avg_error_metrics.py --data-dir $R/ --scenario run_10yrspinup_tau0.3
 ```
 
-## Citation
-
-TODO
-
-## License
-
-TODO

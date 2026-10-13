@@ -82,95 +82,111 @@ def main():
     p.add_argument('--resid-lw', type=float, default=1.3, help='MITgcm line width, resid rows')
     p.add_argument('--no-projection', action='store_true',
                    help='omit the projection-only curve from the residual rows')
+    p.add_argument('--label', default='OpInf ROM', help='legend name of the --run-dir ROM')
+    p.add_argument('--run-dir2', default=None, help='optional second ROM, overlaid in all rows')
+    p.add_argument('--label2', default='OpInf ROM 2', help='legend name of the --run-dir2 ROM')
+    p.add_argument('--color2', default='#D55E00', help='line colour of the --run-dir2 ROM')
     p.add_argument('--out-salt', default='figs/heat_budget/salt_content_sflux_residual_taus.pdf')
     p.add_argument('--out-vol', default='figs/heat_budget/volume_eta_residual_taus.pdf')
     args = p.parse_args()
 
-    run, bd = args.run_dir, args.budget_dir
-    pre = str(Path(run).parent) + '/'
-    cfg = json.load(open(run + 'config.json'))
-    nt_tr = 360 * cfg['n_year_train'] // cfg['n_days']
-    dt = cfg['n_days'] * DAY
-    tr = [np.load(f'{bd}salt_budget_fom_tau{t}.npz') for t in cfg['train_taus']]
-    f0 = tr[0]
-    area, vol = float(f0['area']), float(f0['volume'])
-    drf = f0['drf']
-    nz, ny, nx = len(drf), 248, 248
+    def build(run):
+        """FOM + ROM salt/volume series for one ROM run (per tau, in data[tau])."""
+        bd = args.budget_dir
+        pre =str(Path(run).parent) + '/'
+        cfg = json.load(open(run + 'config.json'))
+        nt_tr = 360 * cfg['n_year_train'] // cfg['n_days']
+        dt = cfg['n_days'] * DAY
+        tr = [np.load(f'{bd}salt_budget_fom_tau{t}.npz') for t in cfg['train_taus']]
+        f0 = tr[0]
+        area, vol = float(f0['area']), float(f0['volume'])
+        drf = f0['drf']
+        nz, ny, nx = len(drf), 248, 248
 
-    # centre functionals
-    grid_dir = args.grid_dir
-    rac = np.squeeze(rdmds(grid_dir + 'RAC')).astype(float)
-    hfac = np.squeeze(rdmds(grid_dir + 'hFacC')).astype(float)
-    w3 = rac[None] * drf[:, None, None] * hfac
-    w_surf = rac * drf[0] * hfac[0] / float(f0['tau_s'])
-    wet = rac * (hfac[0] > 0)
-    tag = f"{cfg['center_opt']}_{cfg['n_days']}days_{cfg['n_year_train']}yrs"
-    with xr.open_dataset(pre + f'centerS_{tag}.nc', engine='h5netcdf') as ds:
-        cS = np.squeeze(ds['center'].values).reshape(nz, ny, nx)
-    with xr.open_dataset(pre + f'centerEta_{tag}.nc', engine='h5netcdf') as ds:
-        cE = np.squeeze(ds['center'].values).reshape(ny, nx)
-    Sc_c, Fs_c, V_c = np.sum(w3 * cS), np.sum(w_surf * cS[0]), np.sum(wet * cE)
+        # centre functionals
+        grid_dir = args.grid_dir
+        rac = np.squeeze(rdmds(grid_dir + 'RAC')).astype(float)
+        hfac = np.squeeze(rdmds(grid_dir + 'hFacC')).astype(float)
+        w3 = rac[None] * drf[:, None, None] * hfac
+        w_surf = rac * drf[0] * hfac[0] / float(f0['tau_s'])
+        wet = rac * (hfac[0] > 0)
+        tag = f"{cfg['center_opt']}_{cfg['n_days']}days_{cfg['n_year_train']}yrs"
+        with xr.open_dataset(pre + f'centerS_{tag}.nc', engine='h5netcdf') as ds:
+            cS = np.squeeze(ds['center'].values).reshape(nz, ny, nx)
+        with xr.open_dataset(pre + f'centerEta_{tag}.nc', engine='h5netcdf') as ds:
+            cE = np.squeeze(ds['center'].values).reshape(ny, nx)
+        Sc_c, Fs_c, V_c = np.sum(w3 * cS), np.sum(w_surf * cS[0]), np.sum(wet * cE)
 
-    Tr = np.load(run + 'Tr.npy')
-    cat = lambda key: np.concatenate([d[key][:nt_tr] for d in tr], axis=0)  # noqa: E731
-    Sc_tr, Fs_tr, V_tr = cat('sc_k').sum(1), cat('FS_S'), cat('eta_int')
-    s, g, v = Tr.T @ (Sc_tr - Sc_c), Tr.T @ (Fs_tr - Fs_c), Tr.T @ (V_tr - V_c)
-    Qhat = np.load(run + 'Qhat.npy')
-    for name, ref, c0, w in (('salt content', Sc_tr, Sc_c, s), ('F_S1', Fs_tr, Fs_c, g),
-                             ('volume', V_tr, V_c, v)):
-        rec = c0 + w @ Qhat
-        print(f'training {name}, projected vs FOM: rel RMS of anomaly '
-              f'{np.sqrt(np.mean((rec - ref) ** 2)) / max(np.std(ref), 1e-30):.2e}'
-              f'  (FOM std {np.std(ref):.3e})')
+        Tr = np.load(run + 'Tr.npy')
+        cat = lambda key: np.concatenate([d[key][:nt_tr] for d in tr], axis=0)  # noqa: E731
+        Sc_tr, Fs_tr, V_tr = cat('sc_k').sum(1), cat('FS_S'), cat('eta_int')
+        s, g, v = Tr.T @ (Sc_tr - Sc_c), Tr.T @ (Fs_tr - Fs_c), Tr.T @ (V_tr - V_c)
+        Qhat = np.load(run + 'Qhat.npy')
+        for name, ref, c0, w in (('salt content', Sc_tr, Sc_c, s), ('F_S1', Fs_tr, Fs_c, g),
+                                 ('volume', V_tr, V_c, v)):
+            rec = c0 + w @ Qhat
+            print(f'training {name}, projected vs FOM: rel RMS of anomaly '
+                  f'{np.sqrt(np.mean((rec - ref) ** 2)) / max(np.std(ref), 1e-30):.2e}'
+                  f'  (FOM std {np.std(ref):.3e})')
 
-    train = [float(t) for t in cfg['train_taus']]
-    data = {}
-    for tau in args.taus:
-        kind = 'train' if float(tau) in train else 'test'
-        q = np.load(run + f'Q_ROM_{kind}_run_10yrspinup_tau{tau}.npy')
-        nt = q.shape[1]
-        if kind == 'train':
-            i0 = train.index(float(tau)) * nt_tr
-            q_prj = Qhat[:, i0:i0 + nt]
-        else:
-            q_prj = np.load(run + f'Q_PROJ_run_10yrspinup_tau{tau}.npy')
-        fom = np.load(f'{bd}salt_budget_fom_tau{tau}.npz')
-        Fstar = float(fom['FS_star'])
-        d = dict(kind=kind, nt=nt,
-                 S={'MITgcm': fom['sc_k'][:nt].sum(1), 'projection': Sc_c + s @ q_prj,
-                    'OpInf': Sc_c + s @ q},
-                 F={'MITgcm': Fstar - fom['FS_S'][:nt], 'projection': Fstar - (Fs_c + g @ q_prj),
-                    'OpInf': Fstar - (Fs_c + g @ q)},
-                 V={'MITgcm': fom['eta_int'][:nt], 'projection': V_c + v @ q_prj,
-                    'OpInf': V_c + v @ q},
-                 Sz=fom['sc_zstar'][:nt])
-        d['RS'], d['RV'] = {}, {}
-        for m in METHODS:
-            Fm = d['F'][m]
+        train = [float(t) for t in cfg['train_taus']]
+        data = {}
+        for tau in args.taus:
+            kind = 'train' if float(tau) in train else 'test'
+            q = np.load(run + f'Q_ROM_{kind}_run_10yrspinup_tau{tau}.npy')
+            nt = q.shape[1]
+            if kind == 'train':
+                i0 = train.index(float(tau)) * nt_tr
+                q_prj = Qhat[:, i0:i0 + nt]
+            else:
+                q_prj = np.load(run + f'Q_PROJ_run_10yrspinup_tau{tau}.npy')
+            fom = np.load(f'{bd}salt_budget_fom_tau{tau}.npz')
+            Fstar = float(fom['FS_star'])
+            d = dict(kind=kind, nt=nt,
+                     S={'MITgcm': fom['sc_k'][:nt].sum(1), 'projection': Sc_c + s @ q_prj,
+                        'OpInf': Sc_c + s @ q},
+                     F={'MITgcm': Fstar - fom['FS_S'][:nt], 'projection': Fstar - (Fs_c + g @ q_prj),
+                        'OpInf': Fstar - (Fs_c + g @ q)},
+                     V={'MITgcm': fom['eta_int'][:nt], 'projection': V_c + v @ q_prj,
+                        'OpInf': V_c + v @ q},
+                     Sz=fom['sc_zstar'][:nt])
+            d['RS'], d['RV'] = {}, {}
+            for m in METHODS:
+                Fm = d['F'][m]
+                cumF = np.concatenate([[0.0], np.cumsum(dt * 0.5 * (Fm[:-1] + Fm[1:]))])
+                d['RS'][m] = d['S'][m] - d['S'][m][0] - cumF
+                d['RV'][m] = d['V'][m] - d['V'][m][0]
+            # z* (exact MITgcm) salt budget, for reference
+            Fm = d['F']['MITgcm']
             cumF = np.concatenate([[0.0], np.cumsum(dt * 0.5 * (Fm[:-1] + Fm[1:]))])
-            d['RS'][m] = d['S'][m] - d['S'][m][0] - cumF
-            d['RV'][m] = d['V'][m] - d['V'][m][0]
-        # z* (exact MITgcm) salt budget, for reference
-        Fm = d['F']['MITgcm']
-        cumF = np.concatenate([[0.0], np.cumsum(dt * 0.5 * (Fm[:-1] + Fm[1:]))])
-        d['RSz'] = d['Sz'] - d['Sz'][0] - cumF
-        d['RS']['MITgcm z*'] = d['RSz']
-        # same budget with the flux summed explicitly (left point), the form the
-        # conservation constraint wT(q_k+1 - q_k) = dt F(q_k) is imposed in
-        d['RS_euler'] = {m: d['S'][m] - d['S'][m][0]
-                         - np.concatenate([[0.0], np.cumsum(dt * d['F'][m][:-1])])
-                         for m in ('MITgcm', 'OpInf')}
-        if args.exact_resid:
-            d['RS']['OpInf'] = d['RS_euler']['OpInf']
-            rm = np.load(f'{bd}relax_monthly_fom_tau{tau}.npz')
-            t_end = rm['interval'][:, 1]
-            k = np.searchsorted(fom['time'], t_end)
-            ok = k < len(fom['time'])
-            assert np.allclose(fom['time'][k[ok]], t_end[ok]) and fom['time'][0] == rm['interval'][0, 0]
-            Sz = fom['sc_zstar']
-            d['RS_month'] = (np.concatenate([[0], k[ok]]) / 360.0,
-                             np.concatenate([[0.0], Sz[k[ok]] - Sz[0] - np.cumsum(rm['salt_int'][ok])]))
-        data[tau] = d
+            d['RSz'] = d['Sz'] - d['Sz'][0] - cumF
+            d['RS']['MITgcm z*'] = d['RSz']
+            # same budget with the flux summed explicitly (left point), the form the
+            # conservation constraint wT(q_k+1 - q_k) = dt F(q_k) is imposed in
+            d['RS_euler'] = {m: d['S'][m] - d['S'][m][0]
+                             - np.concatenate([[0.0], np.cumsum(dt * d['F'][m][:-1])])
+                             for m in ('MITgcm', 'OpInf')}
+            if args.exact_resid:
+                d['RS']['OpInf'] = d['RS_euler']['OpInf']
+                rm = np.load(f'{bd}relax_monthly_fom_tau{tau}.npz')
+                t_end = rm['interval'][:, 1]
+                k = np.searchsorted(fom['time'], t_end)
+                ok = k < len(fom['time'])
+                assert np.allclose(fom['time'][k[ok]], t_end[ok]) and fom['time'][0] == rm['interval'][0, 0]
+                Sz = fom['sc_zstar']
+                d['RS_month'] = (np.concatenate([[0], k[ok]]) / 360.0,
+                                 np.concatenate([[0.0], Sz[k[ok]] - Sz[0] - np.cumsum(rm['salt_int'][ok])]))
+            data[tau] = d
+        return dict(data=data, cfg=cfg, dt=dt, area=area, vol=vol)
+
+    ns = build(args.run_dir)
+    data, cfg, dt, area, vol = (ns[k] for k in ('data', 'cfg', 'dt', 'area', 'vol'))
+    rom_methods = ('OpInf',)
+    if args.run_dir2:      # second ROM: its OpInf series join data[tau] as OpInf2
+        for tau, d2 in build(args.run_dir2)['data'].items():
+            for key in ('S', 'F', 'V', 'RS', 'RV'):
+                data[tau][key]['OpInf2'] = d2[key]['OpInf']
+        rom_methods = ('OpInf', 'OpInf2')
 
     fw = lambda F: -F / (S0 * area) * MM_YR  # noqa: E731  psu m3/s -> mm/yr freshwater
     # psu m3/s -> basin-mean salinity tendency, 1e-3 psu/yr
@@ -186,9 +202,10 @@ def main():
              'OpInf': dict(color=C_ROM, lw=1.1, zorder=2),
              'projection': dict(color='#888888', lw=0.9),
              'MITgcm z*': dict(color='#d95f02', lw=1.1, ls='-.', zorder=3)}
-    label = {'MITgcm': 'MITgcm', 'OpInf': 'OpInf ROM', 'projection': 'projection only',
-             'MITgcm z*': 'MITgcm, z* thickness'}
-    plot_methods = ('MITgcm', 'OpInf') if args.no_projection else METHODS
+    style['OpInf2'] = dict(color=args.color2, lw=1.1, zorder=2)
+    label = {'MITgcm': 'MITgcm', 'OpInf': args.label, 'OpInf2': args.label2,
+             'projection': 'projection only', 'MITgcm z*': 'MITgcm, z* thickness'}
+    plot_methods = (('MITgcm',) if args.no_projection else ('MITgcm', 'projection')) + rom_methods
 
     def running(ax, t, R, conv, ylim):
         k0 = MONTH
@@ -210,10 +227,10 @@ def main():
                 ax = axs[i, j]
                 if rowname == 'salt':
                     S_ref = d['S']['MITgcm'][0]
-                    for m in ('MITgcm', 'OpInf'):
+                    for m in ('MITgcm',) + rom_methods:
                         ax.plot(t, (d['S'][m] - S_ref) / vol * ps, label=label[m], **style[m])
                 elif rowname == 'sflux':
-                    for m in ('MITgcm', 'OpInf'):
+                    for m in ('MITgcm',) + rom_methods:
                         ax.plot(t, sflux_conv(d['F'][m]), label=label[m], **style[m])
                     if args.sflux_ylim:
                         ax.set_ylim(*(yl(args.sflux_ylim) if args.consistent_units
@@ -238,7 +255,7 @@ def main():
                 elif rowname == 'sresid':
                     running(ax, t, d['RS'], fw, args.resid_ylim)
                 elif rowname == 'eta':
-                    for m in ('MITgcm', 'OpInf'):
+                    for m in ('MITgcm',) + rom_methods:
                         ax.plot(t, d['V'][m] / area * 1e3, label=label[m], **style[m])
                 elif rowname == 'vresid':
                     running(ax, t, d['RV'], lambda x: x / area * MM_YR, args.vol_resid_ylim)
