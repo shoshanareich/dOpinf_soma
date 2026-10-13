@@ -23,8 +23,8 @@ are learned by Tikhonov-regularized least squares. In the paper ROM, two rows of
 |---|---|
 | `src/` | Core ROM code: driver `mixed_rom_forcings.py`, parallel POD (`svd.py`), centering/scaling (`shiftscale.py`), forcing projection (`forcing.py`), operator learning and regularization sweep (`learn_rom.py`), evaluation (`eval_rom_forcings.py`), rollouts (`predict_scenario.py`, `rollout_longterm.py`), default paths (`paths.py`) |
 | `analysis/` | Conservation-constrained refit (`refit_conservation.py`), heat/salt budgets, field exports, error metrics, and the paper figure scripts |
-| `configs_forcings/taus_2_4/config_11.json` | Configuration of the base run (train τ 0.2 and 0.4, 10 years, daily snapshots, r = 105) |
-| `run_roms.sh` | Example SLURM script: train and evaluate one ROM from a config |
+| `configs/config_11.json` | Configuration of the base run (train τ 0.2 and 0.4, 10 years, daily snapshots, r = 105) |
+| `job_scripts/run_roms.sh` | Example SLURM script: train and evaluate one ROM from a config |
 | `job_scripts/run_conserve_norm10.sh` | Example SLURM script: the conservation-constrained refit that gives the paper ROM |
 
 The other scripts in `src/` and the repository root are earlier experiments, kept for
@@ -64,7 +64,7 @@ log paths are relative to it.
 mkdir -p logs figs
 
 # 1. Base ROM (r = 105): POD, imposed B/C, Tikhonov sweep, evaluation
-sbatch run_roms.sh configs_forcings/taus_2_4/config_11.json
+sbatch job_scripts/run_roms.sh configs/config_11.json
 
 # 2. Paper ROM: conservation-constrained refit of the base run (reuses its POD basis)
 sbatch job_scripts/run_conserve_norm10.sh

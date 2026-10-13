@@ -20,7 +20,7 @@ evaluator builds ssh_fom / ssh_rom. Held-out (test) scenarios are NOT handled he
 
 Run (serial, in the opinf_mixed env), e.g.:
   python3 src/projection_only_diag.py \
-      --config configs_forcings/config_forcings_9.json \
+      --config configs/config_forcings_9.json \
       --data-dir   /scratch2/shoshi/soma4/dOpInf_results/save_roms/taus_1_5_sameIC/mean_var_2days_10yrs_r65 \
       --preproc-dir /scratch2/shoshi/soma4/dOpInf_results/save_roms/taus_1_5_sameIC
 """

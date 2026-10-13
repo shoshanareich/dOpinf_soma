@@ -6,24 +6,6 @@
 #SBATCH --ntasks=62
 #SBATCH --time=06:00:00
 
-# Paper ROM: conservation-constrained refit of the base run (sbatch run_roms.sh).
-#
-# analysis/refit_conservation.py --fix constrained reuses the base run's POD basis, rebuilds
-# the imposed B/C as physical per-step tendencies, and refits [c A H] with the heat- and
-# salt-content rows fixed exactly (w^T c = flux target, w^T A = w^T - Dt phi^T, w^T H = 0).
-# The other r-2 rows are the usual Tikhonov fit over
-#   reg_A = logspace(-10, 0, 11),  reg_H = logspace(4.3, 6, 18)   (198 candidates).
-# Selection gate: a candidate is rejected if its rollout from Qhat[:,0] at tau 0.2 / 0.4 / 0.5
-# goes non-finite, or its yearly-mean ||q|| exceeds 1.5x the training level in any of the
-# 10 years. Only tau0.5's input series is used, never its MITgcm data, so tau0.5 stays held out.
-# Among the candidates that pass, the lowest sweep score is selected.
-#
-# Then: extra rollouts (tau 0.25/0.35/0.45/0.5), barotropic streamfunction, the
-# gyre-transport-vs-tau figure, the conservation figures, and a 20-yr drift check.
-# Writes <base run>_conserve_constrained_norm10/; the base run is only read.
-# ~40 min for the refit on 62 ranks.
-#
-#   sbatch job_scripts/run_conserve_norm10.sh
 
 set -u
 source activate opinf_mixed

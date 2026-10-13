@@ -10,7 +10,7 @@
 # (src/mixed_rom_forcings.py), then reconstruction, metrics and plots
 # (src/eval_rom_forcings.py). Submit from the repository root:
 #
-#   sbatch run_roms.sh [config.json]      # default: the paper's base run (config_11)
+#   sbatch job_scripts/run_roms.sh [config.json]      # default: the paper's base run (config_11)
 #
 # Output: $SOMA_RESULTS_ROOT/save_roms/<dir_extension>/<center>_<scale>_<n_days>days_<years>yrs_r<r>/
 
@@ -27,9 +27,9 @@ export UCX_MEMTYPE_CACHE="${UCX_MEMTYPE_CACHE:-n}"
 export UCX_TLS="${UCX_TLS:-rc,sm,self}"
 
 root_dir=${SLURM_SUBMIT_DIR:-$PWD}  # submit from the repo root
-# Optional config path override: pass as first arg (sbatch run_roms.sh <config>),
+# Optional config path override: pass as first arg (sbatch job_scripts/run_roms.sh <config>),
 # else honor $ROM_CONFIG_FILE, else fall back to the paper's base-run config.
-CONFIG_FILE="${1:-${ROM_CONFIG_FILE:-$root_dir/configs_forcings/taus_2_4/config_11.json}}"
+CONFIG_FILE="${1:-${ROM_CONFIG_FILE:-$root_dir/configs/config_11.json}}"
 # Bare results root; the driver appends save_roms/<dir_extension>/... and the
 # evaluator rebuilds the preproc dir from it.
 scratch_root_dir=${SOMA_RESULTS_ROOT:-/scratch2/shoshi/soma4/dOpInf_results/}

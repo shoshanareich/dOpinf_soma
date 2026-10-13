@@ -11,7 +11,7 @@ eval_rom_forcings machinery (basis lift + un-center) so results match the plots.
 
 Usage:
     python3 src/export_surface_fields.py \
-        --config configs_forcings/<cfg>.json \
+        --config configs/<cfg>.json \
         --data-dir <results-run-subdir> \
         [--root-dir /scratch2/shoshi/soma4/dOpInf_results/] \
         [--scenarios tau0.3,tau0.5]   # substring filter on FOM-dir names

@@ -27,6 +27,6 @@ FOM_PREFIX = DATA_ROOT + 'run_10yrspinup_tau'   # + '{tau}/states_20yrs.nc'
 SAVE_ROMS = RESULTS_ROOT + 'save_roms/'
 BUDGET_DIR = RESULTS_ROOT + 'heat_budget/'
 
-# Unconstrained r=105 run (configs_forcings/taus_2_4/config_11.json). The paper
+# Unconstrained r=105 run (configs/config_11.json). The paper
 # ROM (_conserve_constrained_norm10) is refit from it by refit_conservation.py.
 BASE_RUN = SAVE_ROMS + 'taus_2_4_sameIC/mean_var_1days_10yrs_r105/'

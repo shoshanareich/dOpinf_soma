@@ -5,14 +5,9 @@
 !.gitignore
 
 # Allow specific directories (must end with /)
-!configs/
 !src/
 
-# Shell scripts: only the two published examples (the rest stay local)
-!run_roms.sh
-
 # Optional: If you want to keep specific files inside the allowed folders
-!configs/**
 !src/**
 src/__pycache__/
 *.pyc
@@ -59,11 +54,12 @@ analysis/*
 
 !job_scripts/
 job_scripts/*
+# the two published example job scripts (the rest stay local)
+!job_scripts/run_roms.sh
 !job_scripts/run_conserve_norm10.sh
 
-# config of the base r=105 run (sbatch run_roms.sh trains it by default)
-!configs_forcings/
-configs_forcings/*
-!configs_forcings/taus_2_4/
-configs_forcings/taus_2_4/*
-!configs_forcings/taus_2_4/config_11.json
+# configs/: only the base r=105 run's config (job_scripts/run_roms.sh trains it by default).
+# configs_old/ and the configs/ subdirectories stay local.
+!configs/
+configs/*
+!configs/config_11.json
