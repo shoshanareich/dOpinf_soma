@@ -21,7 +21,7 @@ are learned by Tikhonov-regularized least squares. In the paper ROM, two rows of
 
 | Path | Contents |
 |---|---|
-| `src/` | Core ROM code: driver `mixed_rom_forcings.py`, parallel POD (`svd.py`), centering/scaling (`shiftscale.py`), forcing projection (`forcing.py`), operator learning and regularization sweep (`learn_rom.py`), evaluation (`eval_rom_forcings.py`), rollouts (`predict_scenario.py`, `rollout_longterm.py`), default paths (`paths.py`) |
+| `src/` | Core ROM code: driver `mixed_rom_forcings.py`, parallel POD (`svd.py`), centering/scaling (`shiftscale.py`), forcing projection (`forcing.py`), operator learning and regularization sweep (`learn_rom.py`), evaluation (`eval_rom_forcings.py`), rollouts at any forcing amplitude (`predict_scenario.py`), projection of a held-out scenario onto the basis (`project_scenario.py`), default paths (`paths.py`), config handling (`config_utils.py`) |
 | `analysis/` | Conservation-constrained refit (`refit_conservation.py`), heat/salt budgets, field exports, error metrics, and the paper figure scripts |
 | `configs/config_11.json` | Configuration of the base run (train τ 0.2 and 0.4, 10 years, daily snapshots, r = 105) |
 | `job_scripts/run_roms.sh` | Example SLURM script: train and evaluate one ROM from a config |
@@ -132,8 +132,7 @@ python analysis/salt_volume_budget.py --taus 0.2 0.3 0.4 0.5 --run-dir $R/ --fom
     --consistent-units --out-salt figs/salt_content_sflux_residual_taus.pdf \
     --out-vol figs/volume_eta_residual_taus.pdf
 
-# Long-term stability and compute cost
-python analysis/plot_longterm_stability.py --data-dir $R/ --n-years 60 --out figs/long_term_stability.pdf
+# Compute cost
 python analysis/plot_compute_cost.py --out figs/compute_cost.pdf
 
 # Error tables (tau0.3)

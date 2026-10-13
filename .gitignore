@@ -20,6 +20,8 @@ src/compare_variability_options.py
 src/projection_only_diag.py
 src/save_surface_fields.py
 src/project_ic.py
+src/plotting.py
+src/rollout_longterm.py
 *.pyc
 src/.results_path_local*
 
@@ -55,7 +57,6 @@ analysis/*
 !analysis/plot_psi_wind_panels.py
 !analysis/plot_pod_spectrum.py
 !analysis/plot_compute_cost.py
-!analysis/plot_longterm_stability.py
 !analysis/eke_vs_tau.py
 # error metrics (tables)
 !analysis/surface_error_metrics.py

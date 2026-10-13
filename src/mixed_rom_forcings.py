@@ -44,10 +44,6 @@ from learn_rom import TikhonovSweep, fit_sequential_model
 import gc # garbage cleanup
 
 if MPI.COMM_WORLD.Get_rank() == 0:
-    import matplotlib.pyplot as plt
-    import matplotlib.animation as animation
-    from IPython.display import HTML
-    from plotting import ROMPlotter
     from forcing import *
     log_timing("Library imports finished; setting vars", script_start)
 

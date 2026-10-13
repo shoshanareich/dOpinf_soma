@@ -58,23 +58,6 @@ variant() {  # $1 tag, $2 gate horizon in years
         --out-resid "figs/heat_budget/$suffix/conservation_residual_heat_salt.pdf" \
         --out-ops "figs/heat_budget/$suffix/conservation_operators_heat_salt.pdf"
 
-    step "[$tag] 20-yr drift check (yearly-mean ||q||, training level ~101.7)"
-    python3 - "$D" <<'EOF'
-import sys
-import numpy as np
-import opinf
-sys.path.insert(0, 'src')
-from rollout_longterm import build_inputs
-D = sys.argv[1] + '/'
-Qhat = np.load(D + 'Qhat.npy')
-m = opinf.models.DiscreteModel.load(D + 'model.h5')
-for tau in [0.2, 0.3, 0.4, 0.45, 0.5]:
-    with np.errstate(all='ignore'):
-        n = np.linalg.norm(m.predict(Qhat[:, 0], niters=20 * 360, inputs=build_inputs(tau, 20, 1)), axis=0)
-    n[~np.isfinite(n)] = np.inf
-    y = n.reshape(20, 360).mean(axis=1)
-    print(f'  tau{tau}: yr 1/5/10/15/20 = ' + ' / '.join(f'{y[k]:.0f}' for k in (0, 4, 9, 14, 19)))
-EOF
     step "[$tag] done"
 }
 
