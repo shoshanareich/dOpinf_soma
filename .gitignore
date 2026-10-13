@@ -8,10 +8,8 @@
 !configs/
 !src/
 
-# Allow all shell scripts
-!*.sh
-run_roms_forcings124.sh
-run_roms_forcings62.sh
+# Shell scripts: only the two published examples (the rest stay local)
+!run_roms.sh
 
 # Optional: If you want to keep specific files inside the allowed folders
 !configs/**
@@ -62,12 +60,8 @@ analysis/*
 !job_scripts/
 job_scripts/*
 !job_scripts/run_conserve_norm10.sh
-!job_scripts/run_unconstrained_norm10.sh
-!job_scripts/run_paperfigs_physscale_stab.sh
-!job_scripts/run_budget_figs_v2.sh
-!job_scripts/run_eke_norm10.sh
 
-# config of the base r=105 run (trained by run_roms_taus24.sh, index 11)
+# config of the base r=105 run (sbatch run_roms.sh trains it by default)
 !configs_forcings/
 configs_forcings/*
 !configs_forcings/taus_2_4/

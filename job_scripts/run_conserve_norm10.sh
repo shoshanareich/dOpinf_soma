@@ -6,25 +6,22 @@
 #SBATCH --ntasks=62
 #SBATCH --time=06:00:00
 
-# Conservation-constrained refit (refit_conservation.py --fix constrained, physical B/C, as
-# _conserve_stab), re-selected with the yearly-mean-norm drift gate ONLY (no rho(A) <= 1):
-#   reject if the rollout from Qhat[:,0] at tau 0.2 / 0.4 / 0.5 goes non-finite or its
-#   yearly-mean ||q|| exceeds 1.5 x the training level (~101.7) in any of the 10 years.
-# Only tau0.5's input series is used, never its FOM data, so tau0.5 stays held out.
+# Paper ROM: conservation-constrained refit of the base run (sbatch run_roms.sh).
 #
-# Why no rho gate (login-node screen, 2026-09-30, constrained fits): in this grid rho(A) and the
-# tau0.5 drift trade off through reg_H -- reg_H 2.07e4: rho 0.99997 but tau0.5 3.47x; reg_H
-# 5.46e4 (_conserve_stab): rho 1.000184, 2.73x; reg_H 1.44e5: rho 1.00013, 1.37x (score 41.56);
-# reg_H 3.79e5: rho 1.0001, 1.28x (score 41.86). No candidate has both, so gate10/gate15 of
-# run_conserve_gate.sh select nothing. rho ~1.0001 is a ~25-yr e-folding: outside the
-# 10-yr paper window, and slower than _conserve_stab's ~15 yr.
+# analysis/refit_conservation.py --fix constrained reuses the base run's POD basis, rebuilds
+# the imposed B/C as physical per-step tendencies, and refits [c A H] with the heat- and
+# salt-content rows fixed exactly (w^T c = flux target, w^T A = w^T - Dt phi^T, w^T H = 0).
+# The other r-2 rows are the usual Tikhonov fit over
+#   reg_A = logspace(-10, 0, 11),  reg_H = logspace(4.3, 6, 18)   (198 candidates).
+# Selection gate: a candidate is rejected if its rollout from Qhat[:,0] at tau 0.2 / 0.4 / 0.5
+# goes non-finite, or its yearly-mean ||q|| exceeds 1.5x the training level in any of the
+# 10 years. Only tau0.5's input series is used, never its MITgcm data, so tau0.5 stays held out.
+# Among the candidates that pass, the lowest sweep score is selected.
 #
-# Finer reg_H grid over the region where candidates pass: reg_H = logspace(4.3, 6, 18)
-# (2e4 .. 1e6, 0.1-decade steps), reg_A = logspace(-10, 0, 11) (reg_A >= 2.8 diverges).
-# 198 candidates (~40 min on 62 ranks).
-#
-# Writes <paper run>_conserve_constrained_norm10/ and figs/gyre_extremes_interp_conserve_norm10.pdf;
-# the paper run and paper figures are only read.
+# Then: extra rollouts (tau 0.25/0.35/0.45/0.5), barotropic streamfunction, the
+# gyre-transport-vs-tau figure, the conservation figures, and a 20-yr drift check.
+# Writes <base run>_conserve_constrained_norm10/; the base run is only read.
+# ~40 min for the refit on 62 ranks.
 #
 #   sbatch job_scripts/run_conserve_norm10.sh
 
