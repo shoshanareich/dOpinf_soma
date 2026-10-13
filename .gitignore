@@ -10,6 +10,16 @@
 # Optional: If you want to keep specific files inside the allowed folders
 !src/**
 src/__pycache__/
+# src/: older experiments and diagnostics, kept locally but not published
+src/block_rom.py
+src/blockV_rom.py
+src/learn_blockrom.py
+src/mixed_rom.py
+src/eval_rom.py
+src/compare_variability_options.py
+src/projection_only_diag.py
+src/save_surface_fields.py
+src/project_ic.py
 *.pyc
 src/.results_path_local*
 

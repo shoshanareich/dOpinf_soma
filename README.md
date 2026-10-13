@@ -27,9 +27,6 @@ are learned by Tikhonov-regularized least squares. In the paper ROM, two rows of
 | `job_scripts/run_roms.sh` | Example SLURM script: train and evaluate one ROM from a config |
 | `job_scripts/run_conserve_norm10.sh` | Example SLURM script: the conservation-constrained refit that gives the paper ROM |
 
-The other scripts in `src/` and the repository root are earlier experiments, kept for
-reference. They are not needed to reproduce the paper.
-
 ## Installation
 
 ```bash

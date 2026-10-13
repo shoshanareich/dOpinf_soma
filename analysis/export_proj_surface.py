@@ -14,9 +14,9 @@ i.e. exactly the same basis and centering the ROM reconstruction uses, so
 fom / proj / rom are directly comparable.
 
 Usage:
-    python3 src/export_proj_surface.py --config <run>/config.json --data-dir <run> \
+    python3 analysis/export_proj_surface.py --config <run>/config.json --data-dir <run> \
         --scenario run_10yrspinup_tau0.2 --from-qhat 0.2
-    python3 src/export_proj_surface.py --config <run>/config.json --data-dir <run> \
+    python3 analysis/export_proj_surface.py --config <run>/config.json --data-dir <run> \
         --scenario run_10yrspinup_tau0.3 --coeffs <run>/Q_PROJ_run_10yrspinup_tau0.3.npy
 """
 import argparse
